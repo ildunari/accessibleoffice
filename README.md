@@ -6,25 +6,35 @@ Implements Microsoft's published [Accessibility Checker rule catalog](https://su
 
 ## Install
 
-```bash
-cd ~/LocalDev/office-a11y-fixer
-uv venv
-uv sync
-uv pip install -e .
+The easy way (recommended) — global, isolated, on PATH:
 
-# Prereq for stage-4 agentic remediation (separate deliverable)
-officecli skills install pptx word
+```bash
+pipx install git+https://github.com/ildunari/a11yfix.git    # one-line install
+officecli skills install pptx word                           # one-time prereq for stage 4
+```
+
+Or for development:
+
+```bash
+git clone https://github.com/ildunari/a11yfix.git ~/LocalDev/office-a11y-fixer
+cd ~/LocalDev/office-a11y-fixer
+uv venv && uv sync && uv pip install -e .
 ```
 
 ## Usage
 
+Pick a mode and point it at a file:
+
 ```bash
-a11yfix deck.pptx                          # full pipeline (detect + auto-fix + AI)
-a11yfix deck.pptx --report-only            # detection only, no writes
-a11yfix deck.pptx --auto-only              # detect + deterministic fixes (no AI)
-a11yfix deck.pptx --output report.json     # write manifest for stage-4 handoff
-a11yfix deck.pptx --strict                 # CI mode: non-zero exit on Errors
+a11yfix deck.pptx --mode scan        # detect only, no writes (CI / audit)
+a11yfix deck.pptx --mode auto        # fully deterministic — fastest, no AI, no API key
+a11yfix deck.pptx --mode full        # full pipeline + interactive Claude Code remediation
+a11yfix deck.pptx --mode full --dry-run   # show what 'full' would do without spending tokens
 ```
+
+**Default mode is `auto`** — safe, fast, no network.
+
+Granular flags still work for advanced users (`--report-only`, `--auto-only`, `--remediate`, `--rules ...`, `--skip-rules ...`, `--strict`, `--output ...`). Run `a11yfix --help` for the full list.
 
 ## Pipeline
 
