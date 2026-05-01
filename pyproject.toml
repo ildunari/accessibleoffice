@@ -1,0 +1,79 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "a11yfix"
+version = "0.1.0"
+description = "Detect and fix Microsoft Office accessibility issues in .docx and .pptx files"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Kosta" }]
+dependencies = [
+    "python-docx>=1.1.2",
+    "python-pptx>=1.0.2",
+    "lxml>=5.3.0",
+    "click>=8.1.7",
+    "rich>=13.9.4",
+    "wcag-contrast-ratio>=0.9",
+    "anthropic>=0.40.0",
+    "pillow>=11.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.4",
+    "pytest-xdist>=3.6.1",
+    "pytest-cov>=6.0.0",
+    "ruff>=0.8.4",
+    "black>=24.10.0",
+    "mypy>=1.13.0",
+]
+openai = ["openai>=1.57.0"]
+
+[project.scripts]
+a11yfix = "a11yfix.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/a11yfix"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+# N (pep8-naming) is intentionally disabled: OOXML element names like
+# nvSpPr, solidFill, tblPr are camelCase by spec and we mirror that.
+ignore = [
+    "E501",   # line length handled by black
+    "E741",   # `l` is unambiguous in HSL color math context
+    "B905",   # zip strict= not always meaningful here
+    "UP042",  # StrEnum requires Python 3.11+ everywhere; we already inherit (str, Enum) for compat
+    "B007",   # unused loop control variable — para_idx is a counter, used in path strings
+    "RUF001", "RUF002",  # en-dash in BULLET_RE is intentional (matches Word bullet glyphs)
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "eval: marks tests as evaluation harness (run via -m eval)",
+    "live_api: marks tests that hit live AI APIs (skip in CI by default)",
+]
+addopts = "-q --strict-markers"
