@@ -16,3 +16,9 @@ venv/
 *.bak
 .a11yfix/
 .DS_Store
+
+# Tauri app
+desktop/node_modules/
+desktop/dist/
+desktop/src-tauri/target/
+desktop/src-tauri/Cargo.lock
