@@ -82,8 +82,7 @@ const SEVERITY_COLOR: Record<Severity, string> = {
   intelligent_services: "text-[var(--color-accent)] bg-[color-mix(in_oklch,var(--color-accent)_15%,transparent)]",
 };
 
-const INSTALL_CMD = "pipx install git+https://github.com/ildunari/a11yfix.git";
-const CLAUDE_CODE_URL = "https://claude.com/product/claude-code";
+const INSTALL_CMD = "pipx install git+https://github.com/ildunari/accessibleoffice.git";
 const MAX_LOG_LINES = 400;
 
 function newRunId(): string {
@@ -157,9 +156,9 @@ export default function App() {
     recheckClaudeCode();
   }, [recheckCli, recheckClaudeCode]);
 
-  useEffect(() => {
-    if (mode === "full" && claudeCode && !claudeCode.found) setMode("auto");
-  }, [claudeCode, mode]);
+  // Full mode runs even without Claude Code: the CLI's stage-4 launcher
+  // handles the missing-Claude case and the embedded fallback handles the
+  // missing-skill case. No silent demotion.
 
   useEffect(() => {
     const subs = [
@@ -274,7 +273,6 @@ export default function App() {
 
   async function run() {
     if (!target || !cli?.found) return;
-    if (mode === "full" && !claudeCode?.found) return;
     setRunning(true);
     resetResults();
     const id = newRunId();
@@ -320,10 +318,6 @@ export default function App() {
     if (batchStateDir) {
       await invoke("reveal_in_finder", { path: batchStateDir }).catch(() => {});
     }
-  }
-
-  async function openClaudeCodePage() {
-    await invoke("open_url", { url: CLAUDE_CODE_URL }).catch(() => {});
   }
 
   async function copyOfficecliCommand(f: Finding) {
@@ -448,40 +442,27 @@ export default function App() {
           <div className="mt-2 grid grid-cols-3 gap-3">
             {(Object.keys(MODE_DESCRIPTIONS) as Mode[]).map((m) => {
               const active = mode === m;
-              const fullDisabled = m === "full" && claudeCode != null && !claudeCode.found;
-              const tooltip = fullDisabled
-                ? "Claude Code is not installed. Click to open the install page."
+              const recommendsClaude = m === "full" && claudeCode != null && !claudeCode.found;
+              const tooltip = recommendsClaude
+                ? "Will run with the embedded orchestration fallback. For best results install Claude Code."
                 : m === "full"
-                ? "Detects, auto-fixes, then runs Claude Code on residual issues."
+                ? "Detects, auto-fixes, then runs the orchestrator (Claude Code) on residual issues."
                 : undefined;
               return (
                 <button
                   key={m}
-                  onClick={() => {
-                    if (fullDisabled) {
-                      openClaudeCodePage();
-                      return;
-                    }
-                    setMode(m);
-                  }}
+                  onClick={() => setMode(m)}
                   title={tooltip}
                   className={`relative rounded-[var(--radius-card)] border p-4 text-left transition
-                    ${fullDisabled
-                      ? "cursor-help border-[var(--color-border)] bg-[var(--color-surface-elevated)] opacity-50"
-                      : active
+                    ${active
                       ? "border-[var(--color-accent)] bg-[color-mix(in_oklch,var(--color-accent)_8%,transparent)] ring-1 ring-[var(--color-accent)]"
                       : "border-[var(--color-border)] bg-[var(--color-surface-elevated)] hover:bg-[color-mix(in_oklch,var(--color-text)_4%,transparent)]"}`}
                 >
                   <div className="flex items-center gap-1.5">
                     <span className="font-medium">{MODE_DESCRIPTIONS[m].title}</span>
-                    {fullDisabled && (
-                      <span className="rounded-[var(--radius-pill)] bg-[var(--color-border)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--color-text-muted)]">
-                        needs Claude Code
-                      </span>
-                    )}
                   </div>
                   <div className="mt-0.5 text-xs text-[var(--color-text-muted)]">
-                    {fullDisabled ? "Click to install Claude Code." : MODE_DESCRIPTIONS[m].subtitle}
+                    {MODE_DESCRIPTIONS[m].subtitle}
                   </div>
                 </button>
               );
@@ -518,7 +499,7 @@ export default function App() {
         <section className="mt-6 flex items-center gap-3">
           {!running ? (
             <button
-              disabled={!target || !cli?.found || (mode === "full" && !claudeCode?.found)}
+              disabled={!target || !cli?.found}
               onClick={run}
               className="rounded-[var(--radius-pill)] bg-[var(--color-text)] px-6 py-2.5 text-sm font-medium text-[var(--color-surface)] shadow-sm transition disabled:cursor-not-allowed disabled:opacity-40 enabled:hover:opacity-90 enabled:active:scale-[0.98]"
             >

@@ -196,12 +196,14 @@ async fn run_a11yfix(
         .stderr(Stdio::piped());
 
     // Tauri windows can't host an interactive Claude Code agent, so the GUI runs `full` as a
-    // dry-run preview. Surface this to the UI as a structured note instead of swallowing it.
+    // dry-run preview. The CLI's stage-4 launcher prints the launch plan including the
+    // orchestration path it picked (skill or embedded fallback) — the user copies the
+    // command and executes it in a terminal.
     if mode == "full" {
         cmd.arg("--dry-run");
         let _ = app.emit(
             "a11yfix-mode-note",
-            "Full mode runs with --dry-run from the desktop app. To execute the agent, run `accessibleoffice file --mode full` from a terminal.",
+            "Full mode prints the orchestrator launch command. Copy it into a terminal to execute. The embedded fallback runs even if the fixing-office-accessibility skill isn't installed.",
         );
     }
 
