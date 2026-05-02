@@ -104,13 +104,24 @@ class OfficecliClient:
         per_op: list[dict[str, Any]] = []
         try:
             payload = json.loads(proc.stdout) if proc.stdout.strip() else {}
-            if isinstance(payload, dict) and "results" in payload:
-                per_op = list(payload["results"])
+            if isinstance(payload, dict):
+                # officecli wraps results as {"data": {"results": [...]}}; older paths
+                # used a top-level "results" array. Support both.
+                if "results" in payload:
+                    per_op = list(payload["results"])
+                elif isinstance(payload.get("data"), dict) and "results" in payload["data"]:
+                    per_op = list(payload["data"]["results"])
             elif isinstance(payload, list):
                 per_op = list(payload)
         except json.JSONDecodeError:
             # fall back: no parseable JSON; treat whole batch as failed
             pass
+
+        # Normalize per-op shape: officecli emits {"success": bool, ...} but
+        # older callers in this codebase look for "ok". Mirror both.
+        for op in per_op:
+            if "ok" not in op and "success" in op:
+                op["ok"] = bool(op["success"])
 
         success = proc.returncode == 0 and all(op.get("ok", True) for op in per_op)
         return BatchResult(

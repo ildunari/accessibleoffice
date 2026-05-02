@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "a11yfix",
+  "productName": "AccessibleOffice",
   "version": "0.1.0",
-  "identifier": "com.kosta.a11yfix",
+  "identifier": "com.kosta.accessibleoffice",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
@@ -12,15 +12,15 @@
   "app": {
     "windows": [
       {
-        "title": "a11yfix",
-        "width": 920,
-        "height": 720,
-        "minWidth": 720,
-        "minHeight": 560,
+        "title": "AccessibleOffice",
+        "width": 960,
+        "height": 760,
+        "minWidth": 760,
+        "minHeight": 580,
         "resizable": true,
         "fullscreen": false,
-        "titleBarStyle": "Overlay",
-        "hiddenTitle": true,
+        "titleBarStyle": "Transparent",
+        "hiddenTitle": false,
         "transparent": false,
         "decorations": true,
         "dragDropEnabled": true
@@ -32,7 +32,11 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg"],
+    "publisher": "Kosta",
+    "category": "DeveloperTool",
+    "shortDescription": "Fix Office accessibility issues in .docx and .pptx",
+    "longDescription": "a11yfix detects and fixes Microsoft Office accessibility issues in .docx and .pptx files using Microsoft's published Accessibility Checker rule catalog.",
+    "targets": ["app", "dmg", "nsis", "appimage", "deb"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -42,6 +46,19 @@
     ],
     "macOS": {
       "minimumSystemVersion": "12.0"
+    },
+    "windows": {
+      "wix": {
+        "language": ["en-US"]
+      },
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": false
+      }
     }
   }
 }

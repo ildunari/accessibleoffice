@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "a11yfix"
+name = "accessibleoffice"
 version = "0.1.0"
 description = "Detect and fix Microsoft Office accessibility issues in .docx and .pptx files"
 readme = "README.md"
@@ -19,6 +19,7 @@ dependencies = [
     "wcag-contrast-ratio>=0.9",
     "anthropic>=0.40.0",
     "pillow>=11.0.0",
+    "claude-agent-sdk>=0.1.72",
 ]
 
 [project.optional-dependencies]
@@ -33,7 +34,9 @@ dev = [
 openai = ["openai>=1.57.0"]
 
 [project.scripts]
-a11yfix = "a11yfix.cli:main"
+accessibleoffice = "a11yfix.cli:main"
+accessibleoffice-status = "a11yfix.cli_status:main"
+accessibleoffice-rollup = "a11yfix.cli_rollup:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/a11yfix"]

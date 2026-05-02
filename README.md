@@ -1,4 +1,4 @@
-# a11yfix
+# accessibleoffice
 
 Detect and fix Microsoft Office accessibility issues in `.docx` and `.pptx` files.
 
@@ -13,6 +13,8 @@ pipx install git+https://github.com/ildunari/a11yfix.git    # one-line install
 officecli skills install pptx word                           # one-time prereq for stage 4
 ```
 
+Full mode (stage 4) also requires [Claude Code](https://claude.com/product/claude-code) on your PATH.
+
 Or for development:
 
 ```bash
@@ -26,15 +28,15 @@ uv venv && uv sync && uv pip install -e .
 Pick a mode and point it at a file:
 
 ```bash
-a11yfix deck.pptx --mode scan        # detect only, no writes (CI / audit)
-a11yfix deck.pptx --mode auto        # fully deterministic — fastest, no AI, no API key
-a11yfix deck.pptx --mode full        # full pipeline + interactive Claude Code remediation
-a11yfix deck.pptx --mode full --dry-run   # show what 'full' would do without spending tokens
+accessibleoffice deck.pptx --mode scan        # detect only, no writes (CI / audit)
+accessibleoffice deck.pptx --mode auto        # fully deterministic — fastest, no AI, no API key
+accessibleoffice deck.pptx --mode full        # full pipeline + interactive Claude Code remediation
+accessibleoffice deck.pptx --mode full --dry-run   # show what 'full' would do without spending tokens
 ```
 
 **Default mode is `auto`** — safe, fast, no network.
 
-Granular flags still work for advanced users (`--report-only`, `--auto-only`, `--remediate`, `--rules ...`, `--skip-rules ...`, `--strict`, `--output ...`). Run `a11yfix --help` for the full list.
+Granular flags still work for advanced users (`--report-only`, `--auto-only`, `--remediate`, `--rules ...`, `--skip-rules ...`, `--strict`, `--output ...`). Run `accessibleoffice --help` for the full list.
 
 ## Pipeline
 
@@ -46,6 +48,14 @@ Granular flags still work for advanced users (`--report-only`, `--auto-only`, `-
 | 4. Agentic review | Claude Code skill on residual judgment-calls | _separate deliverable_ |
 
 The output of stages 1–3 is a **manifest JSON** that stage 4 consumes — see `docs/manifest-schema.md`.
+
+## Desktop app
+
+A Tauri 2 desktop GUI lives in [`desktop/`](desktop). Drag a `.docx` or `.pptx`, pick a mode, see the manifest. Cross-platform builds (macOS `.dmg`, Windows `.msi`, Linux `.AppImage`) — see [`desktop/BUILD.md`](desktop/BUILD.md). The app auto-detects whether the AccessibleOffice CLI and Claude Code are installed, and gates the **Full** mode on Claude Code.
+
+```bash
+cd desktop && npm install && npm run tauri dev
+```
 
 ## Documentation
 

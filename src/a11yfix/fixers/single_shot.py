@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from a11yfix.ai.adapter import VLMAdapter
+from a11yfix.cost_meter import CostMeter
 from a11yfix.manifest import AppliedFix, Finding
 from a11yfix.ooxml.officecli import OfficecliClient, OfficecliError
 from a11yfix.rules.base import REGISTRY, DocumentHandle, OfficecliOp
@@ -49,7 +50,14 @@ def _cache_get(payload: str) -> dict | None:
     return None
 
 
-def _cache_put(payload: str, value: dict) -> None:
+def _cache_put(payload: str, value: dict, *, min_confidence: float = 0.7) -> None:
+    """Only persist responses we'd actually use — never cache low-confidence junk."""
+    if float(value.get("confidence", 0.0)) < min_confidence:
+        return
+    if not str(value.get("text", "")).strip():
+        return
+    if "UNCLEAR" in str(value.get("text", "")):
+        return
     _cache_key(payload).write_text(json.dumps(value))
 
 
@@ -77,10 +85,20 @@ def apply_single_shot_fixes(
     adapter: VLMAdapter,
     *,
     confidence_threshold: float = CONFIDENCE_THRESHOLD,
+    max_cost_total_usd: float | None = None,
 ) -> SingleShotResult:
+    """Run stage-3 AI fixes.
+
+    If `max_cost_total_usd` is set, the batch's CostMeter is consulted before
+    every adapter call; once the cap is reached, remaining findings defer
+    instead of calling the model. Per-call cost is recorded by the adapter.
+    """
     applied: list[AppliedFix] = []
     deferred: list[Finding] = []
     pending_ops: list[tuple[Finding, OfficecliOp, str, float]] = []
+
+    meter = CostMeter.from_env()
+    cap_hit_logged = False
 
     for f in findings:
         rule = REGISTRY.get(f.rule_id)
@@ -92,24 +110,46 @@ def apply_single_shot_fixes(
             deferred.append(f)
             continue
 
+        # Cost-cap gate: if the batch has already spent its budget, defer.
+        if max_cost_total_usd is not None and meter.would_exceed(max_cost_total_usd):
+            if not cap_hit_logged:
+                import sys as _sys
+
+                print(
+                    f"[stage3] cost cap ${max_cost_total_usd:.2f} reached "
+                    f"(spent ${meter.total():.4f}); deferring remaining findings",
+                    file=_sys.stderr,
+                )
+                cap_hit_logged = True
+            f.why_human_needed = "stage-3 deferred: batch cost cap reached"
+            deferred.append(f)
+            continue
+
         try:
             if ssf.kind == "alt-text":
-                # We don't have direct image bytes in v1 — pass surrounding context only
-                # (fallback prompt) until image extraction wires up. Mark medium confidence.
+                from a11yfix.ooxml.image_extract import extract_image_for_finding
+
                 ctx = f"Shape: {f.extra.get('shape_name', f.extra.get('pic_name', '(unknown)'))}"
-                key = f"alttext|{f.id}|{ctx}"
+                extracted = extract_image_for_finding(doc, f)
+                if extracted is None:
+                    # No image bytes recoverable — defer to stage 4.
+                    deferred.append(f)
+                    continue
+                img_bytes, mime = extracted
+                key = f"alttext|{hashlib.sha256(img_bytes).hexdigest()}|{ctx}"
                 cached = _cache_get(key)
                 if cached:
                     text, conf, model = cached["text"], cached["confidence"], cached["model"]
                 else:
-                    # Without image bytes, defer; real impl extracts the picture from OOXML.
+                    res = adapter.describe_image(
+                        img_bytes, max_chars=125, context=ctx
+                    )
+                    text, conf, model = res.text, res.confidence, res.model
+                    _cache_put(key, {"text": text, "confidence": conf, "model": model})
+                if "DECORATIVE" in text or "UNCLEAR" in text:
                     deferred.append(f)
                     continue
-                if "DECORATIVE" in text:
-                    # mark decorative via raw-set for the adec namespace; defer to stage 4 for safety
-                    deferred.append(f)
-                    continue
-                if conf < confidence_threshold:
+                if conf < confidence_threshold or not text:
                     deferred.append(f)
                     continue
                 pending_ops.append(
@@ -122,15 +162,19 @@ def apply_single_shot_fixes(
                 )
 
             elif ssf.kind == "link-text":
-                key = f"linktext|{f.id}|{f.current_value}"
+                url = str(f.extra.get("url", ""))
+                surrounding = str(
+                    f.extra.get("paragraph_text") or f.extra.get("shape_text") or f.current_value
+                )
+                key = f"linktext|{f.id}|{url}|{surrounding[:200]}"
                 cached = _cache_get(key)
                 if cached:
                     text, conf, model = cached["text"], cached["confidence"], cached["model"]
                 else:
-                    res = adapter.suggest_link_text(url="", surrounding_text=f.current_value)
+                    res = adapter.suggest_link_text(url=url, surrounding_text=surrounding)
                     text, conf, model = res.text, res.confidence, res.model
                     _cache_put(key, {"text": text, "confidence": conf, "model": model})
-                if conf < confidence_threshold or not text:
+                if conf < confidence_threshold or not text or "UNCLEAR" in text:
                     deferred.append(f)
                     continue
                 pending_ops.append(
@@ -167,7 +211,13 @@ def apply_single_shot_fixes(
 
             else:
                 deferred.append(f)
-        except Exception:
+        except Exception as exc:
+            import sys as _sys
+
+            print(
+                f"[stage3] {f.id} ({f.rule_id}) deferred: {type(exc).__name__}: {exc}",
+                file=_sys.stderr,
+            )
             deferred.append(f)
 
     if not pending_ops:
@@ -179,10 +229,19 @@ def apply_single_shot_fixes(
             ops_only = [op for (_f, op, _t, _c) in pending_ops]
             try:
                 result = client.batch(ops_only)
-            except OfficecliError:
+            except OfficecliError as exc:
+                import sys as _sys
+
+                print(f"[stage3] officecli batch failed: {exc}", file=_sys.stderr)
                 return SingleShotResult(applied=[], deferred=deferred + [t[0] for t in pending_ops])
             validation = client.validate()
             if validation.status == "errors":
+                import sys as _sys
+
+                print(
+                    f"[stage3] validate errors after batch — restoring: {validation.errors}",
+                    file=_sys.stderr,
+                )
                 client.restore_from_backup()
                 return SingleShotResult(applied=[], deferred=deferred + [t[0] for t in pending_ops])
             for (finding, _op, text, conf), op_result in zip(

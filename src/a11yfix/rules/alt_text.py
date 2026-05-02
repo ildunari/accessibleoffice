@@ -150,47 +150,55 @@ class AltTextRule(BaseRule):
         wp_ns = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
         pic_ns = "http://schemas.openxmlformats.org/drawingml/2006/picture"
 
+        # officecli addresses /body/p[N] as top-level paragraphs only — skip
+        # paragraphs nested inside tables, headers, footers, etc.
         para_idx = 0
-        for para in doc.body.iter(qn("w:p")):
+        for para in doc.body.findall(qn("w:p")):
             para_idx += 1
-            drawings = list(para.iter(qn("w:drawing")))
-            if not drawings:
-                continue
-            pic_idx_in_para = 0
-            for drawing in drawings:
-                pic_idx_in_para += 1
-                # docPr lives at wp:inline/wp:docPr or wp:anchor/wp:docPr
-                doc_pr = None
-                for child in drawing.iter():
-                    if child.tag in (f"{{{wp_ns}}}docPr",):
-                        doc_pr = child
-                        break
-                if doc_pr is None:
+            runs = para.findall(qn("w:r"))
+            for run_idx, run in enumerate(runs, start=1):
+                drawings = run.findall(qn("w:drawing"))
+                if not drawings:
                     continue
-                # Check decorative on the inner pic:cNvPr too.
-                inner_cnv = None
-                for child in drawing.iter():
-                    if child.tag == f"{{{pic_ns}}}cNvPr":
-                        inner_cnv = child
-                        break
-                if inner_cnv is not None and _is_decorative(inner_cnv):
-                    continue
-                descr = doc_pr.get("descr") or doc_pr.get("title") or ""
-                if descr.strip() and not _is_meaningless_alt(descr):
-                    continue
-                pic_id = doc_pr.get("id") or "0"
-                pic_name = doc_pr.get("name") or "(unnamed)"
-                path = f"/body/p[{para_idx}]/pic[{pic_idx_in_para}]"
-                yield Finding(
-                    id=f"alt-p{para_idx}-pic{pic_idx_in_para}",
-                    rule_id=self.meta.rule_id,
-                    severity=self.meta.severity,
-                    wcag_sc=self.meta.wcag_sc,
-                    officecli_path=path,
-                    current_value="",
-                    plain_impact=self.meta.plain_impact,
-                    extra={"pic_id": pic_id, "pic_name": pic_name, "paragraph": para_idx},
-                )
+                for drawing in drawings:
+                    # docPr lives at wp:inline/wp:docPr or wp:anchor/wp:docPr
+                    doc_pr = None
+                    for child in drawing.iter():
+                        if child.tag == f"{{{wp_ns}}}docPr":
+                            doc_pr = child
+                            break
+                    if doc_pr is None:
+                        continue
+                    inner_cnv = None
+                    for child in drawing.iter():
+                        if child.tag == f"{{{pic_ns}}}cNvPr":
+                            inner_cnv = child
+                            break
+                    if inner_cnv is not None and _is_decorative(inner_cnv):
+                        continue
+                    descr = doc_pr.get("descr") or doc_pr.get("title") or ""
+                    if descr.strip() and not _is_meaningless_alt(descr):
+                        continue
+                    pic_id = doc_pr.get("id") or "0"
+                    pic_name = doc_pr.get("name") or "(unnamed)"
+                    # officecli addresses Word pictures via the containing run
+                    # (`/body/p[N]/r[K]`), not via a direct /pic[] child.
+                    path = f"/body/p[{para_idx}]/r[{run_idx}]"
+                    yield Finding(
+                        id=f"alt-p{para_idx}-r{run_idx}",
+                        rule_id=self.meta.rule_id,
+                        severity=self.meta.severity,
+                        wcag_sc=self.meta.wcag_sc,
+                        officecli_path=path,
+                        current_value="",
+                        plain_impact=self.meta.plain_impact,
+                        extra={
+                            "pic_id": pic_id,
+                            "pic_name": pic_name,
+                            "paragraph": para_idx,
+                            "run": run_idx,
+                        },
+                    )
 
     def fix_single_shot(self, finding: Finding, doc: DocumentHandle) -> SingleShotFix | None:
         return SingleShotFix(kind="alt-text", finding=finding, context=dict(finding.extra))

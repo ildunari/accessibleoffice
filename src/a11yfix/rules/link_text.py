@@ -65,14 +65,17 @@ class LinkTextRule(BaseRule):
         from a11yfix.ooxml.docx_reader import DocxHandle
 
         assert isinstance(doc, DocxHandle)
+        rels = _docx_rels(doc)
+        # Match officecli: top-level body paragraphs only.
         para_idx = 0
-        for p in doc.body.iter(qn("w:p")):
+        for p in doc.body.findall(qn("w:p")):
             para_idx += 1
+            para_text = "".join(t.text or "" for t in p.iter(qn("w:t"))).strip()
             for h_idx, h in enumerate(p.iter(qn("w:hyperlink")), start=1):
                 text = "".join(t.text or "" for t in h.iter(qn("w:t")))
-                rel_id = h.get(qn("r:id"))
-                # URL would require resolving the relationship; we only need it for the heuristic
-                if not _is_generic(text, url=None):
+                rel_id = h.get(qn("r:id")) or ""
+                url = rels.get(rel_id, "") if rel_id else ""
+                if not _is_generic(text, url=url):
                     continue
                 yield Finding(
                     id=f"link-p{para_idx}-h{h_idx}",
@@ -82,16 +85,23 @@ class LinkTextRule(BaseRule):
                     officecli_path=f"/body/p[{para_idx}]/hyperlink[{h_idx}]",
                     current_value=text.strip(),
                     plain_impact=self.meta.plain_impact,
-                    extra={"paragraph": para_idx, "rel_id": rel_id or ""},
+                    extra={
+                        "paragraph": para_idx,
+                        "rel_id": rel_id,
+                        "url": url,
+                        "paragraph_text": para_text,
+                    },
                 )
 
     def _detect_pptx(self, doc: DocumentHandle) -> Iterable[Finding]:
         from a11yfix.ooxml.pptx_reader import PptxHandle
 
         assert isinstance(doc, PptxHandle)
+        slide_rels = _pptx_slide_rels(doc)
         for slide_idx, slide_xml in enumerate(doc.slides_xml, start=1):
-            # Each <a:r> may carry an <a:rPr><a:hlinkClick/></a:rPr>
+            rels = slide_rels.get(slide_idx, {})
             for sp_idx, sp in enumerate(slide_xml.iter(qn("p:sp")), start=1):
+                sp_text = "".join(t.text or "" for t in sp.iter(qn("a:t"))).strip()
                 for r_idx, r in enumerate(sp.iter(qn("a:r")), start=1):
                     rPr = r.find(qn("a:rPr"))
                     if rPr is None:
@@ -99,9 +109,11 @@ class LinkTextRule(BaseRule):
                     hlink = rPr.find(qn("a:hlinkClick"))
                     if hlink is None:
                         continue
+                    rel_id = hlink.get(qn("r:id")) or ""
+                    url = rels.get(rel_id, "") if rel_id else ""
                     t = r.find(qn("a:t"))
                     text = (t.text or "") if t is not None else ""
-                    if not _is_generic(text, url=None):
+                    if not _is_generic(text, url=url):
                         continue
                     yield Finding(
                         id=f"link-sld{slide_idx}-sp{sp_idx}-r{r_idx}",
@@ -111,11 +123,51 @@ class LinkTextRule(BaseRule):
                         officecli_path=f"/sld[{slide_idx}]/sp[{sp_idx}]/p[1]/r[{r_idx}]",
                         current_value=text.strip(),
                         plain_impact=self.meta.plain_impact,
-                        extra={"slide_index": slide_idx},
+                        extra={
+                            "slide_index": slide_idx,
+                            "rel_id": rel_id,
+                            "url": url,
+                            "shape_text": sp_text,
+                        },
                     )
 
     def fix_single_shot(self, finding: Finding, doc: DocumentHandle) -> SingleShotFix | None:
         return SingleShotFix(kind="link-text", finding=finding, context=dict(finding.extra))
+
+
+def _docx_rels(doc: DocumentHandle) -> dict[str, str]:
+    """rId → target URL for the main document part (hyperlinks)."""
+    from a11yfix.ooxml.docx_reader import DocxHandle
+
+    if not isinstance(doc, DocxHandle):
+        return {}
+    out: dict[str, str] = {}
+    try:
+        for rel in doc.docx.part.rels.values():
+            if "hyperlink" in str(getattr(rel, "reltype", "")):
+                out[rel.rId] = str(rel.target_ref or "")
+    except Exception:
+        return {}
+    return out
+
+
+def _pptx_slide_rels(doc: DocumentHandle) -> dict[int, dict[str, str]]:
+    """slide_idx (1-based) → {rId: url} for hyperlink relationships."""
+    from a11yfix.ooxml.pptx_reader import PptxHandle
+
+    if not isinstance(doc, PptxHandle):
+        return {}
+    out: dict[int, dict[str, str]] = {}
+    try:
+        for idx, slide in enumerate(doc.pptx.slides, start=1):
+            mp: dict[str, str] = {}
+            for rel in slide.part.rels.values():
+                if "hyperlink" in str(getattr(rel, "reltype", "")):
+                    mp[rel.rId] = str(rel.target_ref or "")
+            out[idx] = mp
+    except Exception:
+        return out
+    return out
 
 
 register_rule(LinkTextRule())
