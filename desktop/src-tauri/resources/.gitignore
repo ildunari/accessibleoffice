@@ -1,0 +1,5 @@
+# Resources are populated per-platform at build time by scripts/prepare-resources.sh
+# (and the CI workflow). Don't commit the binaries themselves.
+*
+!.gitignore
+!README.md

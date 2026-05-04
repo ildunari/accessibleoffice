@@ -6,6 +6,9 @@ on:
     tags:
       - 'desktop-v*'
 
+env:
+  OFFICECLI_VERSION: v1.0.71
+
 jobs:
   build:
     strategy:
@@ -14,12 +17,20 @@ jobs:
         include:
           - platform: 'macos-14'
             target: 'aarch64-apple-darwin'
+            officecli_asset: officecli-mac-arm64
+            officecli_out: officecli
           - platform: 'macos-14'
             target: 'x86_64-apple-darwin'
+            officecli_asset: officecli-mac-x64
+            officecli_out: officecli
           - platform: 'ubuntu-22.04'
             target: ''
+            officecli_asset: officecli-linux-x64
+            officecli_out: officecli
           - platform: 'windows-latest'
             target: ''
+            officecli_asset: officecli-win-x64.exe
+            officecli_out: officecli.exe
 
     runs-on: ${{ matrix.platform }}
 
@@ -62,6 +73,28 @@ jobs:
       - name: Install npm dependencies
         working-directory: desktop
         run: npm ci
+
+      - name: Setup Python (for wheel build)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv (for wheel build)
+        run: pip install --upgrade uv
+
+      - name: Prepare bundled resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p desktop/src-tauri/resources
+          # Download platform-specific officecli binary.
+          curl -fsSL -o "desktop/src-tauri/resources/${{ matrix.officecli_out }}" \
+            "https://github.com/iOfficeAI/OfficeCLI/releases/download/${OFFICECLI_VERSION}/${{ matrix.officecli_asset }}"
+          chmod +x "desktop/src-tauri/resources/${{ matrix.officecli_out }}" 2>/dev/null || true
+          # Build the Python wheel and copy into the resource dir.
+          uv build --wheel
+          cp dist/accessibleoffice-*.whl desktop/src-tauri/resources/
+          ls -lh desktop/src-tauri/resources/
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0

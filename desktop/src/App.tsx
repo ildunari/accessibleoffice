@@ -38,6 +38,40 @@ interface CliStatus {
   version: string | null;
 }
 
+interface PythonInfo {
+  ok: boolean;
+  path: string | null;
+  version: string | null;
+  install_url: string;
+  install_hint: string;
+}
+
+interface ComponentStatus {
+  ok: boolean;
+  path: string | null;
+  version: string | null;
+}
+
+interface SetupStatus {
+  platform: "macos" | "windows" | "linux";
+  python: PythonInfo;
+  officecli: ComponentStatus;
+  wheel: ComponentStatus;
+  claude: ComponentStatus;
+  app_dir: string;
+  runtime_dir: string;
+  setup_complete: boolean;
+}
+
+type SetupStep = "python" | "officecli" | "venv" | "wheel" | "skills";
+type SetupStepStatus = "pending" | "starting" | "ok" | "warn" | "fail";
+
+interface SetupProgressEvent {
+  step: SetupStep;
+  status: "starting" | "ok" | "warn" | "fail";
+  message: string;
+}
+
 interface CostEvent {
   total_usd?: number;
   prompt_tokens?: number;
@@ -82,7 +116,6 @@ const SEVERITY_COLOR: Record<Severity, string> = {
   intelligent_services: "text-[var(--color-accent)] bg-[color-mix(in_oklch,var(--color-accent)_15%,transparent)]",
 };
 
-const INSTALL_CMD = "pipx install git+https://github.com/ildunari/accessibleoffice.git";
 const MAX_LOG_LINES = 400;
 
 function newRunId(): string {
@@ -123,6 +156,16 @@ export default function App() {
   const [dragOver, setDragOver] = useState(false);
   const [cli, setCli] = useState<CliStatus | null>(null);
   const [claudeCode, setClaudeCode] = useState<CliStatus | null>(null);
+  const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null);
+  const [setupBusy, setSetupBusy] = useState(false);
+  const [setupError, setSetupError] = useState<string | null>(null);
+  const [setupProgress, setSetupProgress] = useState<Record<SetupStep, { status: SetupStepStatus; message: string }>>({
+    python: { status: "pending", message: "" },
+    officecli: { status: "pending", message: "" },
+    venv: { status: "pending", message: "" },
+    wheel: { status: "pending", message: "" },
+    skills: { status: "pending", message: "" },
+  });
   const [elapsedMs, setElapsedMs] = useState(0);
   const [cost, setCost] = useState<CostEvent | null>(null);
   const [modeNote, setModeNote] = useState<string | null>(null);
@@ -133,28 +176,49 @@ export default function App() {
   const [batchSummary, setBatchSummary] = useState<BatchSummary | null>(null);
   const runIdRef = useRef<string | null>(null);
 
-  const recheckCli = useCallback(async () => {
+  const recheckSetup = useCallback(async () => {
     try {
-      const result = await invoke<CliStatus>("check_cli");
-      setCli(result);
-    } catch {
-      setCli({ found: false, path: null, version: null });
-    }
-  }, []);
-
-  const recheckClaudeCode = useCallback(async () => {
-    try {
-      const result = await invoke<CliStatus>("check_claude_code");
-      setClaudeCode(result);
-    } catch {
-      setClaudeCode({ found: false, path: null, version: null });
+      const result = await invoke<SetupStatus>("check_setup");
+      setSetupStatus(result);
+      // Mirror onto cli/claudeCode badges so the existing footer keeps working.
+      setCli({ found: result.wheel.ok, path: result.wheel.path, version: result.wheel.version });
+      setClaudeCode({ found: result.claude.ok, path: result.claude.path, version: result.claude.version });
+      return result;
+    } catch (e) {
+      setSetupError(String(e));
+      return null;
     }
   }, []);
 
   useEffect(() => {
-    recheckCli();
-    recheckClaudeCode();
-  }, [recheckCli, recheckClaudeCode]);
+    recheckSetup();
+  }, [recheckSetup]);
+
+  const runSetup = useCallback(
+    async (force: boolean = false) => {
+      setSetupBusy(true);
+      setSetupError(null);
+      setSetupProgress({
+        python: { status: "pending", message: "" },
+        officecli: { status: "pending", message: "" },
+        venv: { status: "pending", message: "" },
+        wheel: { status: "pending", message: "" },
+        skills: { status: "pending", message: "" },
+      });
+      try {
+        await invoke<SetupStatus>("setup_dependencies", { force });
+      } catch (e) {
+        const msg = String(e);
+        if (msg !== "python_missing") {
+          setSetupError(msg);
+        }
+      } finally {
+        await recheckSetup();
+        setSetupBusy(false);
+      }
+    },
+    [recheckSetup]
+  );
 
   // Full mode runs even without Claude Code: the CLI's stage-4 launcher
   // handles the missing-Claude case and the embedded fallback handles the
@@ -185,6 +249,10 @@ export default function App() {
         });
       }),
       listen<BatchSummary>("accofc-batch-done", (e) => setBatchSummary(e.payload)),
+      listen<SetupProgressEvent>("accofc-setup-progress", (e) => {
+        const { step, status, message } = e.payload;
+        setSetupProgress((prev) => ({ ...prev, [step]: { status, message } }));
+      }),
     ];
     return () => {
       subs.forEach((s) => s.then((fn) => fn()));
@@ -373,35 +441,20 @@ export default function App() {
           Drop a Word or PowerPoint file — or a folder of them — to scan and auto-fix accessibility issues.
         </p>
 
-        {cli && !cli.found && (
-          <section className="fade-in mt-6 rounded-[var(--radius-card)] border border-[var(--color-warning)] bg-[color-mix(in_oklch,var(--color-warning)_8%,transparent)] p-5">
-            <div className="flex items-start gap-3">
-              <div className="text-lg">⚠</div>
-              <div className="flex-1">
-                <div className="font-medium">AccessibleOffice CLI not found.</div>
-                <p className="mt-1 text-sm text-[var(--color-text-muted)]">
-                  Install once, then come back. The desktop app is a thin GUI over the Python CLI.
-                </p>
-                <div className="mt-3 flex items-center gap-2">
-                  <code className="flex-1 truncate rounded-[var(--radius-pill)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 font-mono text-xs">
-                    {INSTALL_CMD}
-                  </code>
-                  <button
-                    onClick={() => navigator.clipboard.writeText(INSTALL_CMD)}
-                    className="rounded-[var(--radius-pill)] border border-[var(--color-border)] px-3 py-1.5 text-xs hover:bg-[color-mix(in_oklch,var(--color-text)_4%,transparent)]"
-                  >
-                    Copy
-                  </button>
-                  <button
-                    onClick={recheckCli}
-                    className="rounded-[var(--radius-pill)] bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-[var(--color-accent-fg)] hover:opacity-90"
-                  >
-                    Check again
-                  </button>
-                </div>
-              </div>
-            </div>
-          </section>
+        {/* SETUP OVERLAY — first-run wizard. Three states:
+            1. python not detected -> show download link + per-platform instructions
+            2. python ok but components missing -> "Set up" button + progress
+            3. complete -> hidden
+        */}
+        {setupStatus && !setupStatus.setup_complete && (
+          <SetupOverlay
+            status={setupStatus}
+            busy={setupBusy}
+            progress={setupProgress}
+            error={setupError}
+            onRunSetup={() => runSetup(false)}
+            onRecheck={recheckSetup}
+          />
         )}
 
         {/* DROP ZONE */}
@@ -744,13 +797,203 @@ export default function App() {
         )}
 
         <p className="mt-8 text-center text-[10px] text-[var(--color-text-muted)]">
-          {cli?.found && cli.version && <span>CLI: {cli.version}</span>}
+          {cli?.found && <span>AccessibleOffice installed</span>}
           {cli?.found && claudeCode?.found && (
             <span> · Claude Code: {claudeCode.version || "installed"}</span>
+          )}
+          {cli?.found && (
+            <>
+              {" · "}
+              <button
+                onClick={() => runSetup(true)}
+                disabled={setupBusy}
+                className="underline-offset-2 hover:underline disabled:opacity-50"
+              >
+                {setupBusy ? "Reinstalling…" : "Reinstall dependencies"}
+              </button>
+            </>
           )}
         </p>
       </main>
     </div>
+  );
+}
+
+// SetupOverlay — first-run wizard that handles all three states:
+// - Python missing  -> blocking modal with platform-specific install link
+// - Components missing -> "Set up" button with progress checklist
+// - In-progress -> live step-by-step status
+//
+// Renders as a fixed full-screen overlay with a card. The user cannot reach
+// the file picker until setup_complete is true.
+function SetupOverlay({
+  status,
+  busy,
+  progress,
+  error,
+  onRunSetup,
+  onRecheck,
+}: {
+  status: SetupStatus;
+  busy: boolean;
+  progress: Record<SetupStep, { status: SetupStepStatus; message: string }>;
+  error: string | null;
+  onRunSetup: () => void;
+  onRecheck: () => Promise<unknown>;
+}) {
+  const pythonMissing = !status.python.ok;
+  const platformLabel = status.platform === "macos" ? "Mac" : status.platform === "windows" ? "Windows" : "Linux";
+
+  return (
+    <div className="fade-in fixed inset-0 z-50 flex items-center justify-center bg-[color-mix(in_oklch,var(--color-surface)_85%,transparent)] backdrop-blur-sm">
+      <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface-elevated)] p-7 shadow-2xl">
+        <h2 className="font-display text-xl font-semibold tracking-tight">
+          Welcome — let&apos;s get you set up
+        </h2>
+        <p className="mt-1 text-sm text-[var(--color-text-muted)]">
+          One-time setup. Takes about 30 seconds.
+        </p>
+
+        {pythonMissing ? (
+          <PythonInstallStep
+            python={status.python}
+            platformLabel={platformLabel}
+            onRecheck={onRecheck}
+          />
+        ) : (
+          <SetupRunStep status={status} busy={busy} progress={progress} error={error} onRunSetup={onRunSetup} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PythonInstallStep({
+  python,
+  platformLabel,
+  onRecheck,
+}: {
+  python: PythonInfo;
+  platformLabel: string;
+  onRecheck: () => Promise<unknown>;
+}) {
+  return (
+    <div className="mt-5 space-y-4">
+      <div className="rounded-[var(--radius-card)] border border-[var(--color-warning)] bg-[color-mix(in_oklch,var(--color-warning)_8%,transparent)] p-4">
+        <div className="flex items-start gap-3">
+          <div className="text-lg">⚠</div>
+          <div className="flex-1 text-sm">
+            <div className="font-medium">Python 3.11 or newer is required.</div>
+            <p className="mt-1 text-[var(--color-text-muted)]">{python.install_hint}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <button
+          onClick={() => invoke("open_url", { url: python.install_url })}
+          className="rounded-[var(--radius-pill)] bg-[var(--color-accent)] px-5 py-2.5 text-sm font-medium text-[var(--color-accent-fg)] hover:opacity-90"
+        >
+          Download Python for {platformLabel}
+        </button>
+        <button
+          onClick={() => onRecheck()}
+          className="rounded-[var(--radius-pill)] border border-[var(--color-border)] px-5 py-2 text-sm hover:bg-[color-mix(in_oklch,var(--color-text)_4%,transparent)]"
+        >
+          I&apos;ve installed it — check again
+        </button>
+      </div>
+      <p className="text-[11px] text-[var(--color-text-muted)]">
+        After installing Python, quit and reopen this app, or click &ldquo;check again&rdquo; above.
+      </p>
+    </div>
+  );
+}
+
+function SetupRunStep({
+  status,
+  busy,
+  progress,
+  error,
+  onRunSetup,
+}: {
+  status: SetupStatus;
+  busy: boolean;
+  progress: Record<SetupStep, { status: SetupStepStatus; message: string }>;
+  error: string | null;
+  onRunSetup: () => void;
+}) {
+  const steps: { key: SetupStep; label: string; defaultMessage: string }[] = [
+    { key: "python", label: "Python detected", defaultMessage: status.python.version ? `Python ${status.python.version}` : "" },
+    { key: "officecli", label: "OfficeCLI", defaultMessage: "Installs the OOXML edit engine" },
+    { key: "venv", label: "Python runtime", defaultMessage: "Creates an isolated environment" },
+    { key: "wheel", label: "AccessibleOffice", defaultMessage: "Installs the scanner + auto-fixer" },
+    { key: "skills", label: "Finalize", defaultMessage: "Registers OfficeCLI skills" },
+  ];
+  const started = busy || Object.values(progress).some((p) => p.status !== "pending");
+  return (
+    <div className="mt-5 space-y-4">
+      <p className="text-sm text-[var(--color-text-muted)]">
+        Click &ldquo;Set up&rdquo; to install OfficeCLI and the AccessibleOffice scanner into a private folder
+        in your home directory. No admin password required. We&apos;ll show you exactly what&apos;s happening.
+      </p>
+
+      <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
+        <ul className="space-y-2">
+          {steps.map((s) => {
+            const p = progress[s.key];
+            return (
+              <li key={s.key} className="flex items-start gap-3 text-sm">
+                <SetupStepIcon status={p.status} />
+                <div className="flex-1">
+                  <div className="font-medium">{s.label}</div>
+                  <div className="text-xs text-[var(--color-text-muted)]">
+                    {p.message || s.defaultMessage}
+                  </div>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+
+      {error && (
+        <div className="rounded-[var(--radius-card)] border border-[var(--color-error)] bg-[color-mix(in_oklch,var(--color-error)_8%,transparent)] p-3 text-xs">
+          <div className="font-medium text-[var(--color-error)]">Setup failed</div>
+          <div className="mt-1 font-mono text-[11px] text-[var(--color-text-muted)]">{error}</div>
+        </div>
+      )}
+
+      <button
+        onClick={onRunSetup}
+        disabled={busy}
+        className="w-full rounded-[var(--radius-pill)] bg-[var(--color-accent)] px-5 py-3 text-sm font-medium text-[var(--color-accent-fg)] hover:opacity-90 disabled:opacity-50"
+      >
+        {busy ? "Setting up…" : started && error ? "Retry setup" : "Set up AccessibleOffice"}
+      </button>
+    </div>
+  );
+}
+
+function SetupStepIcon({ status }: { status: SetupStepStatus }) {
+  if (status === "ok")
+    return (
+      <span className="mt-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full bg-[var(--color-success)] text-[10px] font-bold text-white">
+        ✓
+      </span>
+    );
+  if (status === "fail")
+    return (
+      <span className="mt-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full bg-[var(--color-error)] text-[10px] font-bold text-white">
+        ✕
+      </span>
+    );
+  if (status === "starting")
+    return (
+      <span className="mt-0.5 inline-block h-4 w-4 animate-spin rounded-full border-2 border-[var(--color-accent)] border-t-transparent" />
+    );
+  return (
+    <span className="mt-0.5 inline-block h-4 w-4 rounded-full border-2 border-[var(--color-border)]" />
   );
 }
 

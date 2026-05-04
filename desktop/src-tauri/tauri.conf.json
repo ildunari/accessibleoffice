@@ -44,6 +44,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": [
+      "resources/officecli*",
+      "resources/accessibleoffice-*.whl"
+    ],
     "macOS": {
       "minimumSystemVersion": "12.0"
     },

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -8,12 +8,18 @@ use std::time::{Duration, Instant};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::path::BaseDirectory;
 use walkdir::WalkDir;
 
 const CLI_NAME: &str = "accessibleoffice";
 const LEGACY_CLI_NAME: &str = "a11yfix";
 const CLAUDE_CLI: &str = "claude";
+// User-local install destinations populated by setup_dependencies.
+// Officecli binary copied from bundled resources; wheel installed into a
+// private venv. Both are inside HOME so no admin privileges are needed.
+const APP_DIR_NAME: &str = ".accessibleoffice";
+const RUNTIME_DIR_NAME: &str = ".accessibleoffice-runtime";
 
 #[derive(Default)]
 struct RunState {
@@ -104,8 +110,437 @@ fn version_of(path: &std::path::Path) -> Option<String> {
     if s.is_empty() { None } else { Some(s) }
 }
 
+// ----- Setup wizard plumbing -----------------------------------------------
+//
+// The desktop app is shipped to users who may have never opened a terminal.
+// First-run UX is therefore: detect prerequisites, copy bundled officecli into
+// ~/.accessibleoffice/bin/officecli, create a Python venv at
+// ~/.accessibleoffice-runtime/, install our wheel into it. If Python ≥ 3.11
+// isn't present, we surface a per-platform install link instead of trying to
+// install Python ourselves (cross-platform silent Python installs are fragile
+// and require admin auth).
+
+fn app_dir() -> Option<PathBuf> {
+    home_dir().map(|h| h.join(APP_DIR_NAME))
+}
+
+fn runtime_dir() -> Option<PathBuf> {
+    home_dir().map(|h| h.join(RUNTIME_DIR_NAME))
+}
+
+fn app_bin_dir() -> Option<PathBuf> {
+    app_dir().map(|d| d.join("bin"))
+}
+
+fn managed_officecli_path() -> Option<PathBuf> {
+    let name = if cfg!(windows) { "officecli.exe" } else { "officecli" };
+    app_bin_dir().map(|d| d.join(name))
+}
+
+fn managed_cli_path() -> Option<PathBuf> {
+    let name = if cfg!(windows) { "accessibleoffice.exe" } else { "accessibleoffice" };
+    let bin_subdir = if cfg!(windows) { "Scripts" } else { "bin" };
+    runtime_dir().map(|d| d.join(bin_subdir).join(name))
+}
+
+fn parse_python_version(s: &str) -> Option<(u32, u32, u32)> {
+    // `python3 --version` prints "Python 3.12.1" (or rarely just "3.12.1").
+    let re = Regex::new(r"(\d+)\.(\d+)\.(\d+)").ok()?;
+    let c = re.captures(s)?;
+    Some((
+        c[1].parse().ok()?,
+        c[2].parse().ok()?,
+        c[3].parse().ok()?,
+    ))
+}
+
+#[derive(Serialize, Clone)]
+struct PythonInfo {
+    ok: bool,
+    path: Option<String>,
+    version: Option<String>,
+    install_url: String,
+    install_hint: String,
+}
+
+fn python_install_url() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "https://www.python.org/downloads/macos/"
+    } else if cfg!(windows) {
+        "https://www.python.org/downloads/windows/"
+    } else {
+        "https://www.python.org/downloads/"
+    }
+}
+
+fn python_install_hint() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Click the link to download Python 3.12+ from python.org. After installing, quit and reopen this app."
+    } else if cfg!(windows) {
+        "Click the link to download Python 3.12+ for Windows. IMPORTANT: on the first installer screen, check the box that says \"Add python.exe to PATH\" before clicking Install. After installing, quit and reopen this app."
+    } else {
+        "Install Python 3.11+ via your package manager: `sudo apt install python3.12 python3.12-venv` (Debian/Ubuntu) or `sudo dnf install python3.12` (Fedora). Then reopen this app."
+    }
+}
+
+fn detect_python() -> PythonInfo {
+    let candidates: &[&str] = if cfg!(windows) {
+        &["py -3.13", "py -3.12", "py -3.11", "py -3", "python3", "python"]
+    } else {
+        &["python3.13", "python3.12", "python3.11", "python3"]
+    };
+    for cand in candidates {
+        // Split "py -3.12" into argv.
+        let mut parts = cand.split_whitespace();
+        let Some(prog) = parts.next() else { continue; };
+        let extra: Vec<&str> = parts.collect();
+        let mut cmd = Command::new(prog);
+        cmd.args(&extra).arg("--version");
+        let Ok(out) = cmd.output() else { continue; };
+        if !out.status.success() {
+            continue;
+        }
+        let s = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if let Some((maj, min, _)) = parse_python_version(&s) {
+            if maj > 3 || (maj == 3 && min >= 11) {
+                // Resolve the launcher path for display.
+                let path = which::which(prog)
+                    .map(|p| {
+                        if extra.is_empty() {
+                            p.to_string_lossy().into_owned()
+                        } else {
+                            format!("{} {}", p.display(), extra.join(" "))
+                        }
+                    })
+                    .ok();
+                return PythonInfo {
+                    ok: true,
+                    path,
+                    version: Some(format!("{maj}.{min}")),
+                    install_url: python_install_url().to_string(),
+                    install_hint: python_install_hint().to_string(),
+                };
+            }
+        }
+    }
+    PythonInfo {
+        ok: false,
+        path: None,
+        version: None,
+        install_url: python_install_url().to_string(),
+        install_hint: python_install_hint().to_string(),
+    }
+}
+
+#[derive(Serialize, Clone)]
+struct ComponentStatus {
+    ok: bool,
+    path: Option<String>,
+    version: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+struct SetupStatus {
+    platform: String,
+    python: PythonInfo,
+    officecli: ComponentStatus,
+    wheel: ComponentStatus,
+    claude: ComponentStatus,
+    app_dir: String,
+    runtime_dir: String,
+    setup_complete: bool,
+}
+
+fn current_platform() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(windows) {
+        "windows"
+    } else {
+        "linux"
+    }
+}
+
+fn check_managed_officecli() -> ComponentStatus {
+    let Some(p) = managed_officecli_path() else {
+        return ComponentStatus { ok: false, path: None, version: None };
+    };
+    if !p.exists() {
+        return ComponentStatus { ok: false, path: None, version: None };
+    }
+    let version = version_of(&p);
+    ComponentStatus {
+        ok: true,
+        path: Some(p.to_string_lossy().into_owned()),
+        version,
+    }
+}
+
+fn check_managed_cli() -> ComponentStatus {
+    let Some(p) = managed_cli_path() else {
+        return ComponentStatus { ok: false, path: None, version: None };
+    };
+    if !p.exists() {
+        return ComponentStatus { ok: false, path: None, version: None };
+    }
+    // Don't call --version; click rejects it with non-zero. Existence is enough
+    // for the installed-state check.
+    ComponentStatus {
+        ok: true,
+        path: Some(p.to_string_lossy().into_owned()),
+        version: None,
+    }
+}
+
+#[tauri::command]
+async fn check_setup() -> SetupStatus {
+    let python = detect_python();
+    let officecli = check_managed_officecli();
+    let wheel = check_managed_cli();
+    let claude = match resolve_binary(&[CLAUDE_CLI]) {
+        Some(p) => ComponentStatus {
+            ok: true,
+            path: Some(p.to_string_lossy().into_owned()),
+            version: version_of(&p),
+        },
+        None => ComponentStatus { ok: false, path: None, version: None },
+    };
+    let app_dir_s = app_dir().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+    let runtime_dir_s = runtime_dir().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+    let setup_complete = python.ok && officecli.ok && wheel.ok;
+    SetupStatus {
+        platform: current_platform().to_string(),
+        python,
+        officecli,
+        wheel,
+        claude,
+        app_dir: app_dir_s,
+        runtime_dir: runtime_dir_s,
+        setup_complete,
+    }
+}
+
+fn emit_setup(app: &AppHandle, step: &str, status: &str, message: &str) {
+    let _ = app.emit(
+        "accofc-setup-progress",
+        serde_json::json!({ "step": step, "status": status, "message": message }),
+    );
+}
+
+fn copy_bundled_officecli(app: &AppHandle) -> Result<PathBuf, String> {
+    let bin_dir = app_bin_dir().ok_or_else(|| "no HOME".to_string())?;
+    std::fs::create_dir_all(&bin_dir).map_err(|e| format!("mkdir {}: {e}", bin_dir.display()))?;
+    let dst_name = if cfg!(windows) { "officecli.exe" } else { "officecli" };
+    let dst = bin_dir.join(dst_name);
+
+    // Tauri preserves the directory structure of resource globs from
+    // tauri.conf.json. Our config bundles `resources/officecli*`, so the
+    // resolved path is BaseDirectory::Resource + "resources/<name>".
+    let rel = format!("resources/{dst_name}");
+    let src = app
+        .path()
+        .resolve(&rel, BaseDirectory::Resource)
+        .map_err(|e| format!("resolve resource {rel}: {e}"))?;
+    if !src.exists() {
+        return Err(format!(
+            "bundled officecli missing at {}; was the app built with prepare-resources?",
+            src.display()
+        ));
+    }
+    std::fs::copy(&src, &dst).map_err(|e| format!("copy {} -> {}: {e}", src.display(), dst.display()))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perm = std::fs::metadata(&dst).map_err(|e| e.to_string())?.permissions();
+        perm.set_mode(0o755);
+        std::fs::set_permissions(&dst, perm).map_err(|e| e.to_string())?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // Strip Gatekeeper quarantine so first launch doesn't prompt.
+        let _ = Command::new("xattr")
+            .args(["-d", "com.apple.quarantine"])
+            .arg(&dst)
+            .status();
+    }
+
+    Ok(dst)
+}
+
+fn create_venv(python: &PythonInfo) -> Result<PathBuf, String> {
+    let runtime = runtime_dir().ok_or_else(|| "no HOME".to_string())?;
+    let bin_subdir = if cfg!(windows) { "Scripts" } else { "bin" };
+    let venv_python = runtime.join(bin_subdir).join(if cfg!(windows) { "python.exe" } else { "python" });
+    if venv_python.exists() {
+        return Ok(venv_python);
+    }
+    std::fs::create_dir_all(&runtime).map_err(|e| format!("mkdir {}: {e}", runtime.display()))?;
+    let cmd_line = python
+        .path
+        .clone()
+        .ok_or_else(|| "no python path resolved".to_string())?;
+    let mut parts = cmd_line.split_whitespace();
+    let prog = parts.next().ok_or_else(|| "empty python command".to_string())?;
+    let extra: Vec<&str> = parts.collect();
+    let out = Command::new(prog)
+        .args(&extra)
+        .args(["-m", "venv"])
+        .arg(&runtime)
+        .output()
+        .map_err(|e| format!("spawn venv: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "python -m venv failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(venv_python)
+}
+
+fn install_wheel_into_venv(app: &AppHandle, venv_python: &Path) -> Result<(), String> {
+    // Bundled wheels live in BaseDirectory::Resource + "resources/" because of
+    // the glob in tauri.conf.json. Wheel filename embeds the version, so glob
+    // by extension instead of hardcoding the name.
+    let resource_root = app
+        .path()
+        .resolve("resources", BaseDirectory::Resource)
+        .map_err(|e| format!("resolve resource root: {e}"))?;
+    let wheel = std::fs::read_dir(&resource_root)
+        .map_err(|e| format!("read resource dir {}: {e}", resource_root.display()))?
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| p.extension().is_some_and(|ext| ext == "whl"))
+        .ok_or_else(|| {
+            format!(
+                "no wheel found in {}; was the app built with prepare-resources?",
+                resource_root.display()
+            )
+        })?;
+
+    // Upgrade pip first so it understands modern wheel metadata, then force-reinstall the wheel.
+    let pip = Command::new(venv_python)
+        .args(["-m", "pip", "install", "--quiet", "--upgrade", "pip"])
+        .output()
+        .map_err(|e| format!("spawn pip upgrade: {e}"))?;
+    if !pip.status.success() {
+        return Err(format!(
+            "pip upgrade failed: {}",
+            String::from_utf8_lossy(&pip.stderr).trim()
+        ));
+    }
+    let install = Command::new(venv_python)
+        .args(["-m", "pip", "install", "--quiet", "--force-reinstall"])
+        .arg(&wheel)
+        .output()
+        .map_err(|e| format!("spawn pip install: {e}"))?;
+    if !install.status.success() {
+        return Err(format!(
+            "pip install failed: {}",
+            String::from_utf8_lossy(&install.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+fn try_install_officecli_skills(officecli: &Path) {
+    // Best-effort: officecli exits non-zero if no AI tool is detected. Stages
+    // 1-3 don't need the skills, so this is purely a stage-4 nicety.
+    for skill in ["pptx", "word"] {
+        let _ = Command::new(officecli)
+            .args(["skills", "install", skill])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
+#[tauri::command]
+async fn setup_dependencies(app: AppHandle, force: bool) -> Result<SetupStatus, String> {
+    // Step 1: confirm Python is present. If not, surface and bail — the UI
+    // will show a per-platform install modal.
+    emit_setup(&app, "python", "starting", "Checking for Python 3.11+");
+    let python = detect_python();
+    if !python.ok {
+        emit_setup(&app, "python", "fail", "Python 3.11 or newer not found");
+        return Err("python_missing".to_string());
+    }
+    emit_setup(
+        &app,
+        "python",
+        "ok",
+        &format!("Found Python {}", python.version.clone().unwrap_or_default()),
+    );
+
+    // Step 2: officecli — copy bundled resource into ~/.accessibleoffice/bin/.
+    if force {
+        if let Some(d) = app_dir() {
+            let _ = std::fs::remove_dir_all(&d);
+        }
+    }
+    emit_setup(&app, "officecli", "starting", "Installing OfficeCLI");
+    let officecli_path = match copy_bundled_officecli(&app) {
+        Ok(p) => {
+            emit_setup(&app, "officecli", "ok", "OfficeCLI ready");
+            p
+        }
+        Err(e) => {
+            emit_setup(&app, "officecli", "fail", &format!("OfficeCLI install failed: {e}"));
+            return Err(e);
+        }
+    };
+
+    // Step 3: venv.
+    if force {
+        if let Some(d) = runtime_dir() {
+            let _ = std::fs::remove_dir_all(&d);
+        }
+    }
+    emit_setup(&app, "venv", "starting", "Creating Python runtime (this can take ~10s)");
+    let venv_python = match create_venv(&python) {
+        Ok(p) => {
+            emit_setup(&app, "venv", "ok", "Runtime ready");
+            p
+        }
+        Err(e) => {
+            emit_setup(&app, "venv", "fail", &format!("venv failed: {e}"));
+            return Err(e);
+        }
+    };
+
+    // Step 4: install the wheel.
+    emit_setup(&app, "wheel", "starting", "Installing AccessibleOffice (≈30s)");
+    if let Err(e) = install_wheel_into_venv(&app, &venv_python) {
+        emit_setup(&app, "wheel", "fail", &format!("wheel install failed: {e}"));
+        return Err(e);
+    }
+    emit_setup(&app, "wheel", "ok", "AccessibleOffice installed");
+
+    // Step 5: officecli skills (best-effort, don't fail the wizard if no AI tool present).
+    emit_setup(&app, "skills", "starting", "Registering OfficeCLI skills");
+    try_install_officecli_skills(&officecli_path);
+    emit_setup(&app, "skills", "ok", "Setup complete");
+
+    Ok(check_setup().await)
+}
+
 #[tauri::command]
 async fn check_cli() -> CliStatus {
+    // Prefer our managed venv binary so the install path is deterministic.
+    if let Some(p) = managed_cli_path() {
+        if p.exists() {
+            return CliStatus {
+                found: true,
+                path: Some(p.to_string_lossy().into_owned()),
+                version: None,
+            };
+        }
+    }
     let Some(path) = resolve_binary(&[CLI_NAME, LEGACY_CLI_NAME]) else {
         return CliStatus {
             found: false,
@@ -149,6 +584,35 @@ async fn open_url(url: String) -> Result<(), String> {
     result.map_err(|e| format!("open failed: {e}")).map(|_| ())
 }
 
+// Resolve the CLI binary, preferring the managed venv copy installed by the
+// setup wizard. Falls back to system PATH so power users can use a global
+// install if they want.
+fn resolve_cli_binary() -> Option<PathBuf> {
+    if let Some(p) = managed_cli_path() {
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    resolve_binary(&[CLI_NAME, LEGACY_CLI_NAME])
+}
+
+// Build a PATH that has our managed officecli dir prepended so the CLI's
+// subprocess calls find it without needing officecli installed system-wide.
+fn augmented_path() -> std::ffi::OsString {
+    let mut parts: Vec<PathBuf> = Vec::new();
+    if let Some(d) = app_bin_dir() {
+        if d.exists() {
+            parts.push(d);
+        }
+    }
+    if let Some(existing) = std::env::var_os("PATH") {
+        for p in std::env::split_paths(&existing) {
+            parts.push(p);
+        }
+    }
+    std::env::join_paths(parts).unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default())
+}
+
 fn manifest_path_for(file_path: &str) -> PathBuf {
     let lower = file_path.to_ascii_lowercase();
     let suffix = if lower.ends_with(".pptx") {
@@ -167,9 +631,9 @@ async fn run_a11yfix(
     file_path: String,
     mode: String,
 ) -> Result<serde_json::Value, String> {
-    let Some(binary) = resolve_binary(&[CLI_NAME, LEGACY_CLI_NAME]) else {
+    let Some(binary) = resolve_cli_binary() else {
         return Err(
-            "AccessibleOffice CLI not found. Install with: pipx install git+https://github.com/ildunari/accessibleoffice.git"
+            "AccessibleOffice is not set up. Click \"Set up\" in the welcome screen, or reinstall from the app menu."
                 .to_string(),
         );
     };
@@ -192,6 +656,7 @@ async fn run_a11yfix(
         .arg(&mode)
         .arg("--output")
         .arg(&manifest_path)
+        .env("PATH", augmented_path())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -405,9 +870,9 @@ async fn run_batch(
     mode: String,
     max_cost_usd: Option<f64>,
 ) -> Result<serde_json::Value, String> {
-    let Some(binary) = resolve_binary(&[CLI_NAME, LEGACY_CLI_NAME]) else {
+    let Some(binary) = resolve_cli_binary() else {
         return Err(
-            "AccessibleOffice CLI not found. Install with: pipx install git+https://github.com/ildunari/accessibleoffice.git"
+            "AccessibleOffice is not set up. Click \"Set up\" in the welcome screen, or reinstall from the app menu."
                 .to_string(),
         );
     };
@@ -416,7 +881,8 @@ async fn run_batch(
     cmd.arg("--folder")
         .arg(&folder_path)
         .arg("--mode")
-        .arg(&mode);
+        .arg(&mode)
+        .env("PATH", augmented_path());
     if let Some(cap) = max_cost_usd {
         cmd.arg("--max-cost-total-usd").arg(format!("{cap}"));
     }
@@ -565,6 +1031,8 @@ pub fn run() {
             scan_folder,
             check_cli,
             check_claude_code,
+            check_setup,
+            setup_dependencies,
             cancel_run,
             reveal_in_finder,
             open_url
