@@ -9,7 +9,7 @@ Implements Microsoft's published [Accessibility Checker rule catalog](https://su
 The easy way (recommended) — global, isolated, on PATH:
 
 ```bash
-pipx install git+https://github.com/ildunari/a11yfix.git    # one-line install
+pipx install git+https://github.com/ildunari/accessibleoffice.git    # one-line install
 officecli skills install pptx word                           # one-time prereq for stage 4
 ```
 
@@ -18,10 +18,22 @@ Full mode (stage 4) also requires [Claude Code](https://claude.com/product/claud
 Or for development:
 
 ```bash
-git clone https://github.com/ildunari/a11yfix.git ~/LocalDev/office-a11y-fixer
+git clone https://github.com/ildunari/accessibleoffice.git ~/LocalDev/office-a11y-fixer
 cd ~/LocalDev/office-a11y-fixer
 uv venv && uv sync && uv pip install -e .
 ```
+
+## Run from source (no install)
+
+If you have the desktop pack zip, you don't need to install anything globally — `run.sh` (macOS / Linux) and `run.bat` (Windows) bootstrap a private venv in `~/.accessibleoffice-runtime/`, drop the wheel into it, and pass your args straight to the CLI:
+
+```bash
+./run.sh                         # show CLI help
+./run.sh path/to/deck.pptx       # scan + auto-fix (default mode = auto)
+./run.sh path/to/file.docx --mode scan
+```
+
+First run installs the wheel; subsequent runs reuse the venv and start instantly. Delete `~/.accessibleoffice-runtime/` to reset.
 
 ## Usage
 

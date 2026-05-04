@@ -169,7 +169,7 @@ async fn run_a11yfix(
 ) -> Result<serde_json::Value, String> {
     let Some(binary) = resolve_binary(&[CLI_NAME, LEGACY_CLI_NAME]) else {
         return Err(
-            "AccessibleOffice CLI not found. Install with: pipx install git+https://github.com/ildunari/a11yfix.git"
+            "AccessibleOffice CLI not found. Install with: pipx install git+https://github.com/ildunari/accessibleoffice.git"
                 .to_string(),
         );
     };
@@ -407,7 +407,7 @@ async fn run_batch(
 ) -> Result<serde_json::Value, String> {
     let Some(binary) = resolve_binary(&[CLI_NAME, LEGACY_CLI_NAME]) else {
         return Err(
-            "AccessibleOffice CLI not found. Install with: pipx install git+https://github.com/ildunari/a11yfix.git"
+            "AccessibleOffice CLI not found. Install with: pipx install git+https://github.com/ildunari/accessibleoffice.git"
                 .to_string(),
         );
     };
