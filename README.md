@@ -6,17 +6,29 @@ Implements Microsoft's published [Accessibility Checker rule catalog](https://su
 
 ## Install
 
-The easy way (recommended) — global, isolated, on PATH:
+### Easiest: desktop app
+
+Download the installer for your platform from the [latest release](https://github.com/ildunari/accessibleoffice/releases) (`.dmg` for Mac, `.exe` for Windows, `.AppImage` or `.deb` for Linux), open it, and run the app. On first launch, the app shows a one-button setup wizard that:
+
+1. Detects whether you have Python 3.11+ (and walks you through installing it from python.org if not)
+2. Copies its bundled OfficeCLI binary to `~/.accessibleoffice/bin/`
+3. Creates a private Python runtime at `~/.accessibleoffice-runtime/` and installs the scanner
+
+No terminal required. No admin password required. Drag a Word or PowerPoint file onto the app and it scans + auto-fixes.
+
+### CLI install
+
+If you want the command-line tool globally:
 
 ```bash
-pipx install git+https://github.com/ildunari/accessibleoffice.git    # one-line install
-officecli skills install pptx                                # one-time prereq for stage 4
-officecli skills install word                                # one-time prereq for stage 4
+pipx install git+https://github.com/ildunari/accessibleoffice.git
+officecli skills install pptx                # only needed for --mode full (stage 4)
+officecli skills install word
 ```
 
-Full mode (stage 4) also requires [Claude Code](https://claude.com/product/claude-code) on your PATH.
+Full mode (stage 4) also requires [Claude Code](https://claude.com/product/claude-code) on your PATH. You'll need [`officecli`](https://github.com/iOfficeAI/OfficeCLI/releases) on PATH for any mode that writes (auto, full).
 
-Or for development:
+### Development
 
 ```bash
 git clone https://github.com/ildunari/accessibleoffice.git ~/LocalDev/office-a11y-fixer
@@ -64,9 +76,14 @@ The output of stages 1–3 is a **manifest JSON** that stage 4 consumes — see 
 
 ## Desktop app
 
-A Tauri 2 desktop GUI lives in [`desktop/`](desktop). Drag a `.docx` or `.pptx`, pick a mode, see the manifest. Cross-platform builds (macOS `.dmg`, Windows `.msi`, Linux `.AppImage`) — see [`desktop/BUILD.md`](desktop/BUILD.md). The app auto-detects whether the AccessibleOffice CLI and Claude Code are installed, and gates the **Full** mode on Claude Code.
+A Tauri 2 desktop GUI lives in [`desktop/`](desktop). Drag a `.docx` or `.pptx`, pick a mode, see the manifest. Cross-platform builds (macOS `.dmg`, Windows `.exe`, Linux `.AppImage`) — see [`desktop/BUILD.md`](desktop/BUILD.md).
+
+The app bundles OfficeCLI and the AccessibleOffice wheel as resources and runs a one-time setup wizard on first launch: detects Python (links to python.org if missing), copies OfficeCLI to `~/.accessibleoffice/bin/`, creates a private venv, and installs the wheel. Subsequent launches go straight to the file picker.
+
+For local development (the resources are populated by `scripts/prepare-resources.sh`):
 
 ```bash
+scripts/prepare-resources.sh        # downloads OfficeCLI + builds the wheel into desktop/src-tauri/resources/
 cd desktop && npm install && npm run tauri dev
 ```
 
