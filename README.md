@@ -10,7 +10,8 @@ The easy way (recommended) — global, isolated, on PATH:
 
 ```bash
 pipx install git+https://github.com/ildunari/accessibleoffice.git    # one-line install
-officecli skills install pptx word                           # one-time prereq for stage 4
+officecli skills install pptx                                # one-time prereq for stage 4
+officecli skills install word                                # one-time prereq for stage 4
 ```
 
 Full mode (stage 4) also requires [Claude Code](https://claude.com/product/claude-code) on your PATH.
