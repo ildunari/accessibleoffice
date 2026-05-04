@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- WKWebView (the runtime that powers Tauri's UI) needs JIT and writable
+         executable memory for JavaScriptCore. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+
+    <!-- Setup wizard spawns Python and the bundled officecli as child processes;
+         their dynamic libraries (and Python's stdlib .dylibs) are not signed by
+         our team, so disable strict library validation. -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+
+    <!-- The setup wizard runs python -m venv and pip install, both of which
+         use exec/posix_spawn at runtime. -->
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+
+    <!-- Outbound HTTP for the in-app "Download Python for Mac" link (uses
+         Tauri's url-opener) and any future HTTP needs. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!-- The drag-and-drop file picker lands files outside the app sandbox. -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+</dict>
+</plist>

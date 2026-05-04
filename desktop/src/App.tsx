@@ -805,7 +805,15 @@ export default function App() {
             <>
               {" · "}
               <button
-                onClick={() => runSetup(true)}
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "Reinstall AccessibleOffice's bundled tools? This deletes the existing private install and recreates it from the bundled resources. Takes about 30 seconds."
+                    )
+                  ) {
+                    runSetup(true);
+                  }
+                }}
                 disabled={setupBusy}
                 className="underline-offset-2 hover:underline disabled:opacity-50"
               >
