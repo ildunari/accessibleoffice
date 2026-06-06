@@ -32,6 +32,13 @@ GENERIC_PHRASES = {
     "learn more",
     "details",
     "this",
+    "this article",
+    "this document",
+    "this file",
+    "this help center article",
+    "this page",
+    "this pdf",
+    "this resource",
 }
 
 URL_RE = re.compile(r"^(https?|ftp|mailto|tel)://?", re.IGNORECASE)

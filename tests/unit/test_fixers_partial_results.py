@@ -57,8 +57,11 @@ class ShortResultClient:
 
 class FakeAdapter:
     name = "fake"
+    calls = 0
 
     def suggest_link_text(self, url, surrounding_text):
+        self.calls += 1
+
         class Result:
             text = "descriptive link"
             confidence = 0.9
@@ -102,3 +105,23 @@ def test_single_shot_short_officecli_results_defer_missing_ops(tmp_path, monkeyp
 
     assert [f.finding_id for f in result.applied] == ["f1"]
     assert [f.id for f in result.deferred] == ["f2"]
+
+
+def test_single_shot_zero_cost_cap_defers_without_adapter_call(tmp_path, monkeypatch):
+    doc = FakeDoc(tmp_path / "deck.pptx")
+    findings = [_finding(1)]
+    adapter = FakeAdapter()
+
+    monkeypatch.setitem(single_shot.REGISTRY, "fake-rule", FakeRule())
+
+    result = single_shot.apply_single_shot_fixes(
+        findings,
+        doc,
+        adapter,
+        max_cost_total_usd=0,
+    )
+
+    assert adapter.calls == 0
+    assert result.applied == []
+    assert [f.id for f in result.deferred] == ["f1"]
+    assert result.deferred[0].why_human_needed == "stage-3 deferred: batch cost cap reached"

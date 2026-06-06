@@ -111,8 +111,10 @@ def apply_single_shot_fixes(
             deferred.append(f)
             continue
 
-        # Cost-cap gate: if the batch has already spent its budget, defer.
-        if max_cost_total_usd is not None and meter.would_exceed(max_cost_total_usd):
+        # Cost-cap gate: cap <= 0 means no model calls; otherwise defer once spent.
+        if max_cost_total_usd is not None and (
+            max_cost_total_usd <= 0 or meter.would_exceed(max_cost_total_usd)
+        ):
             if not cap_hit_logged:
                 import sys as _sys
 

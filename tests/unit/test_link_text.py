@@ -13,3 +13,7 @@ def test_url_only_is_generic():
 
 def test_descriptive_text_not_generic():
     assert not _is_generic("Quarterly Earnings Report", url=None)
+
+
+def test_this_help_center_article_is_generic():
+    assert _is_generic("this Help Center article", url="https://help.example.com/article")

@@ -458,6 +458,7 @@ def build_launch_plan(
     file_path: Path,
     manifest: Manifest,
     *,
+    manifest_path: Path | None = None,
     model: str = DEFAULT_MODEL,
     subagent_model: str = DEFAULT_SUBAGENT_MODEL,
     grunt_model: str = DEFAULT_GRUNT_MODEL,
@@ -469,7 +470,7 @@ def build_launch_plan(
         DOCX_COMPANION_SKILLS if manifest.file_format == FileFormat.DOCX else PPTX_COMPANION_SKILLS
     )
     skills = [SKILL_NAME, *companion] if use_skill else []
-    manifest_path = file_path.parent / f"{file_path.stem}.manifest.json"
+    manifest_path = manifest_path or file_path.parent / f"{file_path.stem}.manifest.json"
     backup = Path(manifest.file_backup_path) if manifest.file_backup_path else None
 
     if use_skill:

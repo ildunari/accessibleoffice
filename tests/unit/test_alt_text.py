@@ -10,7 +10,7 @@ from pptx.util import Inches  # type: ignore[import-untyped]
 
 from a11yfix.ooxml.image_extract import extract_image_for_finding
 from a11yfix.ooxml.pptx_reader import open_pptx
-from a11yfix.rules.alt_text import AltTextRule
+from a11yfix.rules.alt_text import AltTextQualityRule, AltTextRule
 
 
 def test_alt_missing_detected(pptx_no_alt):
@@ -24,6 +24,7 @@ def test_alt_present_not_flagged(pptx_with_alt):
     findings = list(AltTextRule().detect(doc))
     # The fixture has at least one image with alt; we should not flag it
     assert not findings
+    assert not list(AltTextQualityRule().detect(doc))
 
 
 def test_pptx_text_shapes_are_not_image_alt_findings(tmp_path):
@@ -99,3 +100,70 @@ def test_pptx_image_filled_shape_without_alt_is_flagged_and_extractable(tmp_path
     extracted = extract_image_for_finding(doc, findings[0])
     assert extracted is not None
     assert extracted[1] == "image/png"
+
+
+def test_pptx_auto_generated_alt_is_quality_warning_not_missing(tmp_path):
+    pres = Presentation()
+    slide = pres.slides.add_slide(pres.slide_layouts[6])
+    buf = io.BytesIO()
+    Image.new("RGB", (50, 50), color="purple").save(buf, format="PNG")
+    buf.seek(0)
+    pic = slide.shapes.add_picture(buf, Inches(1), Inches(1), Inches(2), Inches(2))
+    pic._element.nvPicPr.cNvPr.set("descr", "Chart\n\nDescription automatically generated")
+
+    path = tmp_path / "auto_generated_alt.pptx"
+    pres.save(path)
+
+    doc = open_pptx(path)
+    missing = list(AltTextRule().detect(doc))
+    quality = list(AltTextQualityRule().detect(doc))
+
+    assert missing == []
+    assert len(quality) == 1
+    assert quality[0].rule_id == "alt-text-generic"
+    assert quality[0].severity.value == "warning"
+    assert quality[0].current_value == "Chart\n\nDescription automatically generated"
+    assert quality[0].extra["reason"] == "office_auto_generated"
+    assert AltTextQualityRule().fix_single_shot(quality[0], doc).kind == "alt-text"
+
+
+def test_pptx_local_path_alt_is_quality_warning(tmp_path):
+    pres = Presentation()
+    slide = pres.slides.add_slide(pres.slide_layouts[6])
+    buf = io.BytesIO()
+    Image.new("RGB", (50, 50), color="orange").save(buf, format="PNG")
+    buf.seek(0)
+    pic = slide.shapes.add_picture(buf, Inches(1), Inches(1), Inches(2), Inches(2))
+    pic._element.nvPicPr.cNvPr.set("descr", r"C:\clients\aps\AP&S Stacked.png")
+
+    path = tmp_path / "path_alt.pptx"
+    pres.save(path)
+
+    doc = open_pptx(path)
+    missing = list(AltTextRule().detect(doc))
+    quality = list(AltTextQualityRule().detect(doc))
+
+    assert missing == []
+    assert len(quality) == 1
+    assert quality[0].extra["reason"] == "local_file_path"
+
+
+def test_pptx_picture_auto_name_stays_missing(tmp_path):
+    pres = Presentation()
+    slide = pres.slides.add_slide(pres.slide_layouts[6])
+    buf = io.BytesIO()
+    Image.new("RGB", (50, 50), color="yellow").save(buf, format="PNG")
+    buf.seek(0)
+    pic = slide.shapes.add_picture(buf, Inches(1), Inches(1), Inches(2), Inches(2))
+    pic._element.nvPicPr.cNvPr.set("descr", "Picture 4")
+
+    path = tmp_path / "picture_auto_name.pptx"
+    pres.save(path)
+
+    doc = open_pptx(path)
+    missing = list(AltTextRule().detect(doc))
+    quality = list(AltTextQualityRule().detect(doc))
+
+    assert len(missing) == 1
+    assert missing[0].rule_id == "alt-text-missing"
+    assert quality == []

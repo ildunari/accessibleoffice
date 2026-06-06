@@ -115,6 +115,7 @@ def _process_one_file(
     remediate: bool,
     remediate_model: str,
     dry_run: bool,
+    max_ai_cost_usd: float | None = None,
     print_to_terminal: bool = True,
 ) -> FileResult:
     """Run the single-file pipeline. Returns a FileResult.
@@ -162,7 +163,12 @@ def _process_one_file(
         if remediate:
             from a11yfix.stage4 import build_launch_plan, launch
 
-            plan = build_launch_plan(file, manifest, model=remediate_model)
+            plan = build_launch_plan(
+                file,
+                manifest,
+                manifest_path=manifest_path,
+                model=remediate_model,
+            )
             rc = launch(plan, dry_run=dry_run)
             return FileResult(
                 file=file,
@@ -202,7 +208,12 @@ def _process_one_file(
         if remediate:
             from a11yfix.stage4 import build_launch_plan, launch
 
-            plan = build_launch_plan(file, manifest, model=remediate_model)
+            plan = build_launch_plan(
+                file,
+                manifest,
+                manifest_path=manifest_path,
+                model=remediate_model,
+            )
             rc = launch(plan, dry_run=dry_run)
             return FileResult(
                 file=file,
@@ -263,6 +274,8 @@ def _process_one_file(
             cap = float(cap_env)
         except ValueError:
             cap = None
+    if max_ai_cost_usd is not None:
+        cap = max_ai_cost_usd
     ss = apply_single_shot_fixes(findings_left, doc, adapter, max_cost_total_usd=cap)
     manifest.stage_3_fixes_applied = ss.applied
     manifest.residual_findings = ss.deferred
@@ -278,7 +291,12 @@ def _process_one_file(
     if remediate:
         from a11yfix.stage4 import build_launch_plan, launch
 
-        plan = build_launch_plan(file, manifest, model=remediate_model)
+        plan = build_launch_plan(
+            file,
+            manifest,
+            manifest_path=manifest_path,
+            model=remediate_model,
+        )
         rc = launch(plan, dry_run=dry_run)
         return FileResult(
             file=file,
@@ -763,6 +781,7 @@ def main(
         remediate=remediate,
         remediate_model=remediate_model,
         dry_run=dry_run,
+        max_ai_cost_usd=max_ai_cost_usd,
         print_to_terminal=True,
     )
     if result.manifest is None:

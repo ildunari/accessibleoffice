@@ -17,7 +17,8 @@ Resilience:
 from __future__ import annotations
 
 import asyncio
-import os
+import contextlib
+import io
 import random
 import tempfile
 import time
@@ -41,6 +42,8 @@ from a11yfix.ai.prompts import (
 DEFAULT_MODEL = "claude-sonnet-4-6"
 MAX_RETRIES = 4
 BASE_BACKOFF_SEC = 0.5
+MAX_READ_IMAGE_BYTES = 750_000
+MAX_READ_IMAGE_DIMENSION = 1600
 
 
 class RateLimitedError(Exception):
@@ -95,6 +98,7 @@ class ClaudeAgentSDKAdapter:
             TextBlock,
             query,
         )
+
         from a11yfix.cost_meter import CostMeter
 
         meter = CostMeter.from_env()
@@ -155,11 +159,11 @@ class ClaudeAgentSDKAdapter:
     def describe_image(
         self, image_bytes: bytes, *, max_chars: int, context: str
     ) -> AltTextResult:
-        suffix = ".png" if image_bytes[:8].startswith(b"\x89PNG") else ".jpg"
+        read_bytes, suffix = _prepare_image_for_read(image_bytes)
         with tempfile.NamedTemporaryFile(
             prefix="a11yfix-img-", suffix=suffix, delete=False
         ) as tmp:
-            tmp.write(image_bytes)
+            tmp.write(read_bytes)
             tmp_path = Path(tmp.name)
         try:
             user = (
@@ -173,12 +177,17 @@ class ClaudeAgentSDKAdapter:
                 "single word DECORATIVE. If you cannot read the file, reply with "
                 "the single word UNCLEAR."
             )
-            text = self._run(ALT_TEXT_SYSTEM, user, allowed_tools=["Read"])
-        finally:
             try:
+                text = self._run(ALT_TEXT_SYSTEM, user, allowed_tools=["Read"])
+            except Exception as exc:
+                if _looks_like_sdk_payload_error(exc):
+                    raise RuntimeError(
+                        "Claude Code SDK image payload exceeded its message buffer"
+                    ) from None
+                raise
+        finally:
+            with contextlib.suppress(OSError):
                 tmp_path.unlink()
-            except OSError:
-                pass
         # Strip any tool-narration preamble: keep only the last non-empty line.
         lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
         if lines:
@@ -234,3 +243,43 @@ def _run_async(coro_fn) -> Any:
             return pool.submit(lambda: asyncio.run(coro_fn())).result()
 
 
+def _prepare_image_for_read(image_bytes: bytes) -> tuple[bytes, str]:
+    """Bound image payloads before asking Claude Code's Read tool to ingest them."""
+    suffix = ".png" if image_bytes[:8].startswith(b"\x89PNG") else ".jpg"
+    if len(image_bytes) <= MAX_READ_IMAGE_BYTES:
+        return image_bytes, suffix
+    try:
+        from PIL import Image, ImageOps  # type: ignore[import-untyped]
+    except ImportError:
+        return image_bytes, suffix
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as im:
+            im = ImageOps.exif_transpose(im)
+            im.thumbnail((MAX_READ_IMAGE_DIMENSION, MAX_READ_IMAGE_DIMENSION))
+            if im.mode not in ("RGB", "L"):
+                bg = Image.new("RGB", im.size, "white")
+                if "A" in im.getbands():
+                    bg.paste(im, mask=im.getchannel("A"))
+                else:
+                    bg.paste(im)
+                im = bg
+            elif im.mode != "RGB":
+                im = im.convert("RGB")
+            for quality in (85, 75, 65, 55):
+                out = io.BytesIO()
+                im.save(out, format="JPEG", quality=quality, optimize=True)
+                data = out.getvalue()
+                if len(data) <= MAX_READ_IMAGE_BYTES or quality == 55:
+                    return data, ".jpg"
+    except Exception:
+        return image_bytes, suffix
+    return image_bytes, suffix
+
+
+def _looks_like_sdk_payload_error(exc: Exception) -> bool:
+    msg = f"{type(exc).__name__}: {exc}".lower()
+    return (
+        "json message exceeded maximum buffer size" in msg
+        or "message exceeded maximum buffer" in msg
+        or "maximum buffer size" in msg
+    )
