@@ -36,6 +36,12 @@ class SingleShotResult:
     deferred: list[Finding]
 
 
+def _defer(finding: Finding, deferred: list[Finding], reason: str) -> None:
+    if not finding.why_human_needed or finding.why_human_needed.startswith("stage-3 deferred:"):
+        finding.why_human_needed = reason
+    deferred.append(finding)
+
+
 def _cache_key(payload: str) -> Path:
     h = hashlib.sha256(payload.encode("utf-8")).hexdigest()
     return CACHE_DIR / f"{h}.json"
@@ -104,11 +110,11 @@ def apply_single_shot_fixes(
     for f in findings:
         rule = REGISTRY.get(f.rule_id)
         if rule is None:
-            deferred.append(f)
+            _defer(f, deferred, "stage-3 deferred: no registered rule")
             continue
         ssf = rule.fix_single_shot(f, doc)
         if ssf is None:
-            deferred.append(f)
+            _defer(f, deferred, "stage-3 deferred: no single-shot fix available")
             continue
 
         # Cost-cap gate: cap <= 0 means no model calls; otherwise defer once spent.
@@ -124,8 +130,7 @@ def apply_single_shot_fixes(
                     file=_sys.stderr,
                 )
                 cap_hit_logged = True
-            f.why_human_needed = "stage-3 deferred: batch cost cap reached"
-            deferred.append(f)
+            _defer(f, deferred, "stage-3 deferred: batch cost cap reached")
             continue
 
         try:
@@ -135,8 +140,7 @@ def apply_single_shot_fixes(
                 ctx = f"Shape: {f.extra.get('shape_name', f.extra.get('pic_name', '(unknown)'))}"
                 extracted = extract_image_for_finding(doc, f)
                 if extracted is None:
-                    # No image bytes recoverable — defer to stage 4.
-                    deferred.append(f)
+                    _defer(f, deferred, "stage-3 deferred: image bytes not recoverable")
                     continue
                 img_bytes, _mime = extracted
                 key = f"alttext|{hashlib.sha256(img_bytes).hexdigest()}|{ctx}"
@@ -149,11 +153,21 @@ def apply_single_shot_fixes(
                     )
                     text, conf, model = res.text, res.confidence, res.model
                     _cache_put(key, {"text": text, "confidence": conf, "model": model})
-                if "DECORATIVE" in text or "UNCLEAR" in text:
-                    deferred.append(f)
+                if "DECORATIVE" in text:
+                    _defer(f, deferred, "stage-3 deferred: model judged image decorative")
                     continue
-                if conf < confidence_threshold or not text:
-                    deferred.append(f)
+                if "UNCLEAR" in text:
+                    _defer(f, deferred, "stage-3 deferred: model returned UNCLEAR")
+                    continue
+                if not text:
+                    _defer(f, deferred, "stage-3 deferred: model returned empty text")
+                    continue
+                if conf < confidence_threshold:
+                    _defer(
+                        f,
+                        deferred,
+                        f"stage-3 deferred: low confidence ({conf:.2f} < {confidence_threshold:.2f})",
+                    )
                     continue
                 pending_ops.append(
                     (
@@ -177,8 +191,18 @@ def apply_single_shot_fixes(
                     res = adapter.suggest_link_text(url=url, surrounding_text=surrounding)
                     text, conf, model = res.text, res.confidence, res.model
                     _cache_put(key, {"text": text, "confidence": conf, "model": model})
-                if conf < confidence_threshold or not text or "UNCLEAR" in text:
-                    deferred.append(f)
+                if "UNCLEAR" in text:
+                    _defer(f, deferred, "stage-3 deferred: model returned UNCLEAR")
+                    continue
+                if not text:
+                    _defer(f, deferred, "stage-3 deferred: model returned empty text")
+                    continue
+                if conf < confidence_threshold:
+                    _defer(
+                        f,
+                        deferred,
+                        f"stage-3 deferred: low confidence ({conf:.2f} < {confidence_threshold:.2f})",
+                    )
                     continue
                 pending_ops.append(
                     (
@@ -200,8 +224,18 @@ def apply_single_shot_fixes(
                     res = adapter.suggest_slide_title(text_ctx, layout)
                     text, conf, model = res.text, res.confidence, res.model
                     _cache_put(key, {"text": text, "confidence": conf, "model": model})
-                if "UNCLEAR" in text or conf < confidence_threshold or not text:
-                    deferred.append(f)
+                if "UNCLEAR" in text:
+                    _defer(f, deferred, "stage-3 deferred: model returned UNCLEAR")
+                    continue
+                if not text:
+                    _defer(f, deferred, "stage-3 deferred: model returned empty text")
+                    continue
+                if conf < confidence_threshold:
+                    _defer(
+                        f,
+                        deferred,
+                        f"stage-3 deferred: low confidence ({conf:.2f} < {confidence_threshold:.2f})",
+                    )
                     continue
                 pending_ops.append(
                     (
@@ -213,7 +247,7 @@ def apply_single_shot_fixes(
                 )
 
             else:
-                deferred.append(f)
+                _defer(f, deferred, f"stage-3 deferred: unsupported fix kind {ssf.kind}")
         except Exception as exc:
             import sys as _sys
 
@@ -221,7 +255,7 @@ def apply_single_shot_fixes(
                 f"[stage3] {f.id} ({f.rule_id}) deferred: {type(exc).__name__}: {exc}",
                 file=_sys.stderr,
             )
-            deferred.append(f)
+            _defer(f, deferred, f"stage-3 deferred: {type(exc).__name__}: {exc}")
 
     if not pending_ops:
         return SingleShotResult(applied=[], deferred=deferred)
@@ -236,7 +270,9 @@ def apply_single_shot_fixes(
                 import sys as _sys
 
                 print(f"[stage3] officecli batch failed: {exc}", file=_sys.stderr)
-                return SingleShotResult(applied=[], deferred=deferred + [t[0] for t in pending_ops])
+                for finding, _op, _text, _conf in pending_ops:
+                    _defer(finding, deferred, f"stage-3 deferred: officecli batch failed: {exc}")
+                return SingleShotResult(applied=[], deferred=deferred)
             validation = client.validate()
             if validation.status == "errors":
                 import sys as _sys
@@ -246,7 +282,9 @@ def apply_single_shot_fixes(
                     file=_sys.stderr,
                 )
                 client.restore_from_backup()
-                return SingleShotResult(applied=[], deferred=deferred + [t[0] for t in pending_ops])
+                for finding, _op, _text, _conf in pending_ops:
+                    _defer(finding, deferred, "stage-3 deferred: validation failed after write")
+                return SingleShotResult(applied=[], deferred=deferred)
             for pending, op_result in zip_longest(pending_ops, result.per_op or []):
                 if pending is None:
                     continue
@@ -270,7 +308,9 @@ def apply_single_shot_fixes(
                         )
                     )
                 else:
-                    deferred.append(finding)
+                    _defer(finding, deferred, "stage-3 deferred: officecli did not apply operation")
             return SingleShotResult(applied=applied, deferred=deferred)
     except FileNotFoundError:
-        return SingleShotResult(applied=[], deferred=deferred + [t[0] for t in pending_ops])
+        for finding, _op, _text, _conf in pending_ops:
+            _defer(finding, deferred, "stage-3 deferred: officecli not found")
+        return SingleShotResult(applied=[], deferred=deferred)
