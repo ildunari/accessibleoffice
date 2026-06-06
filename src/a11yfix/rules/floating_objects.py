@@ -27,7 +27,7 @@ class FloatingObjectsRule(BaseRule):
         assert isinstance(doc, DocxHandle)
         wp_ns = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
         para_idx = 0
-        for p in doc.body.iter(qn("w:p")):
+        for p in doc.body.findall(qn("w:p")):
             para_idx += 1
             for d_idx, d in enumerate(p.iter(qn("w:drawing")), start=1):
                 anchor = None

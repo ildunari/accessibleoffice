@@ -67,11 +67,13 @@ class TableHeaderRule(BaseRule):
         from a11yfix.ooxml.docx_reader import DocxHandle
 
         assert isinstance(doc, DocxHandle)
-        for tbl_idx, tbl in enumerate(doc.body.iter(qn("w:tbl")), start=1):
-            rows = list(tbl.iter(qn("w:tr")))
+        for tbl_idx, tbl in enumerate(doc.body.findall(qn("w:tbl")), start=1):
+            rows = list(tbl.findall(qn("w:tr")))
             if not rows:
                 continue
             first = rows[0]
+            if len(rows) < 2 or len(first.findall(qn("w:tc"))) < 2:
+                continue
             if _row_has_tblheader(first):
                 continue
             yield Finding(
@@ -94,6 +96,9 @@ class TableHeaderRule(BaseRule):
         assert isinstance(doc, PptxHandle)
         for slide_idx, slide_xml in enumerate(doc.slides_xml, start=1):
             for tbl_idx, tbl in enumerate(slide_xml.iter(qn("a:tbl")), start=1):
+                rows = list(tbl.findall(qn("a:tr")))
+                if not rows or len(rows) < 2 or len(rows[0].findall(qn("a:tc"))) < 2:
+                    continue
                 tblPr = tbl.find(qn("a:tblPr"))
                 first_row = tblPr.get("firstRow") if tblPr is not None else None
                 if first_row == "1":

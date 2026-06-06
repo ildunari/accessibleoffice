@@ -62,7 +62,7 @@ class HeadingStructureRule(BaseRule):
 
         assert isinstance(doc, DocxHandle)
         last_level: int | None = None
-        for para_idx, p in enumerate(doc.body.iter(qn("w:p")), start=1):
+        for para_idx, p in enumerate(doc.body.findall(qn("w:p")), start=1):
             level = _heading_level(p)
             if level is not None:
                 if last_level is not None and level - last_level > 1:

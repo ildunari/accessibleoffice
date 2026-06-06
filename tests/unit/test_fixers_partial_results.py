@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from docx import Document  # type: ignore[import-untyped]
 from PIL import Image  # type: ignore[import-untyped]
 from pptx import Presentation  # type: ignore[import-untyped]
 from pptx.util import Inches  # type: ignore[import-untyped]
 
 from a11yfix.fixers import deterministic, single_shot
 from a11yfix.manifest import FileFormat, Finding, Severity
+from a11yfix.ooxml.docx_reader import open_docx
 from a11yfix.ooxml.officecli import BatchResult, ValidationResult
 from a11yfix.ooxml.pptx_reader import open_pptx
 from a11yfix.rules.alt_text import AltTextRule
@@ -240,3 +242,59 @@ def test_single_shot_pptx_alt_text_emits_officecli_alt_op(tmp_path, monkeypatch)
     assert captured[0].verb == "set"
     assert captured[0].path == finding.officecli_path
     assert captured[0].props == {"alt": "Blue square image"}
+
+
+def test_single_shot_docx_alt_text_emits_officecli_alt_op(tmp_path, monkeypatch):
+    img_path = tmp_path / "image.png"
+    Image.new("RGB", (50, 50), color="green").save(img_path)
+    docx = Document()
+    docx.add_picture(str(img_path))
+    path = tmp_path / "doc.docx"
+    docx.save(path)
+
+    doc = open_docx(path)
+    finding = next(iter(AltTextRule().detect(doc)))
+    captured: list[OfficecliOp] = []
+
+    class AltAdapter:
+        name = "fake-alt"
+
+        def describe_image(self, image_bytes, *, max_chars, context):
+            class Result:
+                text = "Green square image"
+                confidence = 0.95
+                model = "fake-alt"
+
+            return Result()
+
+    class CapturingClient:
+        backup_path = None
+
+        def __init__(self, path):
+            self.path = path
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def batch(self, ops):
+            captured.extend(ops)
+            return BatchResult(success=True, per_op=[{"ok": True}])
+
+        def validate(self):
+            return ValidationResult(status="ok")
+
+    monkeypatch.setattr(single_shot, "OfficecliClient", CapturingClient)
+    monkeypatch.setattr(single_shot, "_cache_get", lambda payload: None)
+    monkeypatch.setattr(single_shot, "_cache_put", lambda payload, value: None)
+
+    result = single_shot.apply_single_shot_fixes([finding], doc, AltAdapter())
+
+    assert [fix.finding_id for fix in result.applied] == [finding.id]
+    assert result.deferred == []
+    assert len(captured) == 1
+    assert captured[0].verb == "set"
+    assert captured[0].path == finding.officecli_path
+    assert captured[0].props == {"alt": "Green square image"}

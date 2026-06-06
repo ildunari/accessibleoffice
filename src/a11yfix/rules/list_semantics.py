@@ -31,7 +31,7 @@ class ListSemanticsRule(BaseRule):
 
         assert isinstance(doc, DocxHandle)
         para_idx = 0
-        for p in doc.body.iter(qn("w:p")):
+        for p in doc.body.findall(qn("w:p")):
             para_idx += 1
             text = "".join(t.text or "" for t in p.iter(qn("w:t")))
             if not BULLET_RE.match(text):

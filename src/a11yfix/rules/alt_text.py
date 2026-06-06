@@ -191,7 +191,7 @@ def _docx_image_targets(doc: DocumentHandle) -> Iterable[_ImageTarget]:
                     if child.tag == f"{{{pic_ns}}}cNvPr":
                         inner_cnv = child
                         break
-                if inner_cnv is not None and _is_decorative(inner_cnv):
+                if _is_decorative(doc_pr) or (inner_cnv is not None and _is_decorative(inner_cnv)):
                     continue
                 yield _ImageTarget(
                     shape_kind="pic",
