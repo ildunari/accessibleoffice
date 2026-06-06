@@ -21,6 +21,7 @@ class DocxHandle:
     body: etree._Element
     core_xml: etree._Element | None
     settings_xml: etree._Element | None
+    styles_xml: etree._Element | None
 
     def root_xml(self) -> etree._Element:
         return self.body
@@ -48,6 +49,17 @@ def open_docx(path: str | Path) -> DocxHandle:
                 settings_xml = doc.settings.part.element  # type: ignore[attr-defined]
             except Exception:
                 settings_xml = None
+    styles_xml: etree._Element | None = None
+    try:
+        styles_xml = doc.styles.element  # type: ignore[attr-defined]
+    except Exception:
+        try:
+            styles_xml = doc.styles._element  # type: ignore[attr-defined]
+        except Exception:
+            try:
+                styles_xml = doc.styles.part.element  # type: ignore[attr-defined]
+            except Exception:
+                styles_xml = None
     return DocxHandle(
         file_format=FileFormat.DOCX,
         path=str(p),
@@ -56,4 +68,5 @@ def open_docx(path: str | Path) -> DocxHandle:
         body=body,
         core_xml=core_xml,
         settings_xml=settings_xml,
+        styles_xml=styles_xml,
     )

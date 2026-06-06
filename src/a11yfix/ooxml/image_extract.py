@@ -52,21 +52,20 @@ def _extract_docx(doc: DocumentHandle, finding: Finding) -> tuple[bytes, str] | 
 
     if not isinstance(doc, DocxHandle):
         return None
-    para_idx = int(finding.extra.get("paragraph", 0))
-    if para_idx <= 0:
-        return None
-    paras = doc.body.findall(qn("w:p"))
-    if para_idx > len(paras):
-        return None
-    para = paras[para_idx - 1]
-    run_idx = int(finding.extra.get("run", 0))
     drawings: list[Any] = []
+    para_idx = int(finding.extra.get("paragraph") or 0)
+    run_idx = int(finding.extra.get("run") or 0)
     if run_idx > 0:
-        runs = para.findall(qn("w:r"))
-        if run_idx <= len(runs):
-            drawings = runs[run_idx - 1].findall(qn("w:drawing"))
+        paras = doc.body.findall(qn("w:p"))
+        if 0 < para_idx <= len(paras):
+            runs = paras[para_idx - 1].findall(qn("w:r"))
+            if run_idx <= len(runs):
+                drawings = runs[run_idx - 1].findall(qn("w:drawing"))
     if not drawings:
-        drawings = list(para.iter(qn("w:drawing")))
+        pic_id = str(finding.extra.get("pic_id") or "")
+        drawings = _docx_drawings_for_pic_id(doc, pic_id)
+    if not drawings:
+        drawings = list(doc.body.iter(qn("w:drawing")))
     if not drawings:
         return None
     drawing = drawings[0]
@@ -92,6 +91,18 @@ def _extract_docx(doc: DocumentHandle, finding: Finding) -> tuple[bytes, str] | 
     if not target:
         return None
     return _read_zip_member(doc.path, "word", target)
+
+
+def _docx_drawings_for_pic_id(doc: DocumentHandle, pic_id: str) -> list[Any]:
+    if not pic_id:
+        return []
+    drawings: list[Any] = []
+    for drawing in doc.body.iter(qn("w:drawing")):
+        for child in drawing.iter():
+            if etree.QName(child.tag).localname == "docPr" and child.get("id") == pic_id:
+                drawings.append(drawing)
+                break
+    return drawings
 
 
 def _extract_pptx(doc: DocumentHandle, finding: Finding) -> tuple[bytes, str] | None:

@@ -37,8 +37,15 @@ class DocumentLanguageRule(BaseRule):
             from a11yfix.ooxml.docx_reader import DocxHandle
 
             assert isinstance(doc, DocxHandle)
+            styles = doc.styles_xml
+            if styles is not None:
+                lang_el = styles.find(
+                    f"{qn('w:docDefaults')}/{qn('w:rPrDefault')}/{qn('w:rPr')}/{qn('w:lang')}"
+                )
+                if lang_el is not None:
+                    lang = lang_el.get(qn("w:val")) or ""
             settings = doc.settings_xml
-            if settings is not None:
+            if not lang and settings is not None:
                 tfl = settings.find(qn("w:themeFontLang"))
                 if tfl is not None:
                     lang = tfl.get(qn("w:val")) or ""

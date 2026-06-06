@@ -12,6 +12,7 @@ import re
 from collections.abc import Iterable
 
 from a11yfix.manifest import FileFormat, Finding, Severity
+from a11yfix.ooxml.docx_paths import iter_paragraph_refs
 from a11yfix.ooxml.namespaces import qn
 from a11yfix.rules.base import BaseRule, DocumentHandle, RuleMeta, register_rule
 
@@ -62,16 +63,17 @@ class HeadingStructureRule(BaseRule):
 
         assert isinstance(doc, DocxHandle)
         last_level: int | None = None
-        for para_idx, p in enumerate(doc.body.findall(qn("w:p")), start=1):
+        for para_ref in iter_paragraph_refs(doc.body):
+            p = para_ref.element
             level = _heading_level(p)
             if level is not None:
                 if last_level is not None and level - last_level > 1:
                     yield Finding(
-                        id=f"hdr-skip-p{para_idx}",
+                        id=f"hdr-skip-{_path_slug(para_ref.path)}",
                         rule_id=self.meta.rule_id,
                         severity=self.meta.severity,
                         wcag_sc=self.meta.wcag_sc,
-                        officecli_path=f"/body/p[{para_idx}]",
+                        officecli_path=para_ref.path,
                         current_value=f"H{level}",
                         plain_impact=self.meta.plain_impact,
                         why_human_needed=f"Heading skipped from H{last_level} to H{level}",
@@ -80,15 +82,19 @@ class HeadingStructureRule(BaseRule):
                 last_level = level
             elif _looks_like_fake_heading(p):
                 yield Finding(
-                    id=f"hdr-fake-p{para_idx}",
+                    id=f"hdr-fake-{_path_slug(para_ref.path)}",
                     rule_id=self.meta.rule_id,
                     severity=Severity.TIP,
                     wcag_sc=self.meta.wcag_sc,
-                    officecli_path=f"/body/p[{para_idx}]",
+                    officecli_path=para_ref.path,
                     current_value="bold paragraph, no Heading style",
                     plain_impact="This looks like a heading but isn't tagged as one.",
                     why_human_needed="May or may not be a heading — needs human confirmation.",
                 )
+
+
+def _path_slug(path: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "-", path).strip("-")
 
 
 register_rule(HeadingStructureRule())

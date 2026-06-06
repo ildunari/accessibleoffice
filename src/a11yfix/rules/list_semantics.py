@@ -11,6 +11,7 @@ import re
 from collections.abc import Iterable
 
 from a11yfix.manifest import FileFormat, Finding, Severity
+from a11yfix.ooxml.docx_paths import iter_paragraph_refs
 from a11yfix.ooxml.namespaces import qn
 from a11yfix.rules.base import BaseRule, DocumentHandle, RuleMeta, register_rule
 
@@ -30,9 +31,8 @@ class ListSemanticsRule(BaseRule):
         from a11yfix.ooxml.docx_reader import DocxHandle
 
         assert isinstance(doc, DocxHandle)
-        para_idx = 0
-        for p in doc.body.findall(qn("w:p")):
-            para_idx += 1
+        for para_ref in iter_paragraph_refs(doc.body):
+            p = para_ref.element
             text = "".join(t.text or "" for t in p.iter(qn("w:t")))
             if not BULLET_RE.match(text):
                 continue
@@ -40,15 +40,19 @@ class ListSemanticsRule(BaseRule):
             if pPr is not None and pPr.find(qn("w:numPr")) is not None:
                 continue
             yield Finding(
-                id=f"fake-list-p{para_idx}",
+                id=f"fake-list-{_path_slug(para_ref.path)}",
                 rule_id=self.meta.rule_id,
                 severity=self.meta.severity,
                 wcag_sc=self.meta.wcag_sc,
-                officecli_path=f"/body/p[{para_idx}]",
+                officecli_path=para_ref.path,
                 current_value=text[:60],
                 plain_impact=self.meta.plain_impact,
                 why_human_needed="Promoting to a real list may shift formatting; defer to human.",
             )
+
+
+def _path_slug(path: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "-", path).strip("-")
 
 
 register_rule(ListSemanticsRule())

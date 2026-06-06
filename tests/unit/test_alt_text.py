@@ -4,6 +4,8 @@ import io
 
 from PIL import Image  # type: ignore[import-untyped]
 from pptx import Presentation  # type: ignore[import-untyped]
+from pptx.chart.data import ChartData  # type: ignore[import-untyped]
+from pptx.enum.chart import XL_CHART_TYPE  # type: ignore[import-untyped]
 from pptx.oxml import parse_xml  # type: ignore[import-untyped]
 from pptx.oxml.ns import nsdecls  # type: ignore[import-untyped]
 from pptx.util import Inches  # type: ignore[import-untyped]
@@ -167,3 +169,50 @@ def test_pptx_picture_auto_name_stays_missing(tmp_path):
     assert len(missing) == 1
     assert missing[0].rule_id == "alt-text-missing"
     assert quality == []
+
+
+def test_pptx_chart_without_alt_is_flagged_as_object_alt(tmp_path):
+    pres = Presentation()
+    slide = pres.slides.add_slide(pres.slide_layouts[6])
+    data = ChartData()
+    data.categories = ["A", "B"]
+    data.add_series("Series", (1, 2))
+    slide.shapes.add_chart(
+        XL_CHART_TYPE.COLUMN_CLUSTERED,
+        Inches(1),
+        Inches(1),
+        Inches(4),
+        Inches(3),
+        data,
+    )
+    path = tmp_path / "chart_no_alt.pptx"
+    pres.save(path)
+
+    findings = list(AltTextRule().detect(open_pptx(path)))
+
+    assert len(findings) == 1
+    assert findings[0].officecli_path.startswith("/sld[1]/chart[@id=")
+    assert findings[0].extra["shape_kind"] == "chart"
+
+
+def test_pptx_chart_with_alt_is_not_flagged(tmp_path):
+    pres = Presentation()
+    slide = pres.slides.add_slide(pres.slide_layouts[6])
+    data = ChartData()
+    data.categories = ["A", "B"]
+    data.add_series("Series", (1, 2))
+    chart_shape = slide.shapes.add_chart(
+        XL_CHART_TYPE.COLUMN_CLUSTERED,
+        Inches(1),
+        Inches(1),
+        Inches(4),
+        Inches(3),
+        data,
+    )
+    chart_shape._element.nvGraphicFramePr.cNvPr.set("descr", "Bar chart comparing A and B")
+    path = tmp_path / "chart_with_alt.pptx"
+    pres.save(path)
+
+    findings = list(AltTextRule().detect(open_pptx(path)))
+
+    assert findings == []

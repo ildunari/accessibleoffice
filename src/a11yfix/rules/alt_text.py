@@ -5,6 +5,7 @@ WCAG 1.1.1 (Non-text Content). Severity: Error.
 OOXML elements inspected (PPT):
   - p:pic / p:nvPicPr / p:cNvPr  (picture: @descr or @title)
   - p:sp with p:spPr/a:blipFill / p:nvSpPr / p:cNvPr  (image-filled shape)
+  - p:graphicFrame charts / SmartArt and p:grpSp groups
 
 OOXML elements inspected (Word):
   - w:drawing/wp:inline (or wp:anchor) / a:graphic / a:graphicData
@@ -22,6 +23,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from a11yfix.manifest import FileFormat, Finding, Severity
+from a11yfix.ooxml.docx_paths import iter_paragraph_refs, iter_run_refs
 from a11yfix.ooxml.namespaces import qn
 from a11yfix.rules.base import (
     BaseRule,
@@ -111,10 +113,45 @@ class _ImageTarget:
     slide_index: int | None = None
     paragraph: int | None = None
     run: int | None = None
+    paragraph_path: str | None = None
+    run_path: str | None = None
 
 
 def _raw_alt(cnvpr: object) -> str:
     return (cnvpr.get("descr") or cnvpr.get("title") or "").strip()  # type: ignore[union-attr]
+
+
+def _shape_target(
+    *,
+    shape_kind: str,
+    element_name: str,
+    cnv: object,
+    slide_idx: int,
+) -> _ImageTarget:
+    shape_id = cnv.get("id") or "0"  # type: ignore[union-attr]
+    return _ImageTarget(
+        shape_kind=shape_kind,
+        shape_id=shape_id,
+        shape_name=cnv.get("name") or "(unnamed)",  # type: ignore[union-attr]
+        officecli_path=f"/sld[{slide_idx}]/{element_name}[@id={shape_id}]",
+        alt_text=_raw_alt(cnv),
+        cnv=cnv,
+        slide_index=slide_idx,
+    )
+
+
+def _graphic_frame_kind(graphic_frame: object) -> str | None:
+    graphic_data = graphic_frame.find(f"{qn('a:graphic')}/{qn('a:graphicData')}")  # type: ignore[union-attr]
+    if graphic_data is None:
+        return None
+    uri = (graphic_data.get("uri") or "").lower()
+    if "chart" in uri:
+        return "chart"
+    if "diagram" in uri:
+        return "smartArt"
+    # Embedded tables have their own table-header rule and should not become
+    # image-alt findings.
+    return None
 
 
 def _pptx_image_targets(doc: DocumentHandle) -> Iterable[_ImageTarget]:
@@ -132,16 +169,7 @@ def _pptx_image_targets(doc: DocumentHandle) -> Iterable[_ImageTarget]:
             cnv = nv.find(qn("p:cNvPr"))
             if cnv is None:
                 continue
-            shape_id = cnv.get("id") or "0"
-            yield _ImageTarget(
-                shape_kind="pic",
-                shape_id=shape_id,
-                shape_name=cnv.get("name") or "(unnamed)",
-                officecli_path=f"/sld[{slide_idx}]/pic[@id={shape_id}]",
-                alt_text=_raw_alt(cnv),
-                cnv=cnv,
-                slide_index=slide_idx,
-            )
+            yield _shape_target(shape_kind="pic", element_name="pic", cnv=cnv, slide_idx=slide_idx)
         for sp in spTree.iter(qn("p:sp")):
             if not _has_blip_fill(sp):
                 continue
@@ -151,15 +179,35 @@ def _pptx_image_targets(doc: DocumentHandle) -> Iterable[_ImageTarget]:
             cnv = nv.find(qn("p:cNvPr"))
             if cnv is None:
                 continue
-            shape_id = cnv.get("id") or "0"
-            yield _ImageTarget(
-                shape_kind="sp",
-                shape_id=shape_id,
-                shape_name=cnv.get("name") or "(unnamed)",
-                officecli_path=f"/sld[{slide_idx}]/sp[@id={shape_id}]",
-                alt_text=_raw_alt(cnv),
+            yield _shape_target(shape_kind="sp", element_name="sp", cnv=cnv, slide_idx=slide_idx)
+        for graphic_frame in spTree.iter(qn("p:graphicFrame")):
+            kind = _graphic_frame_kind(graphic_frame)
+            if kind is None:
+                continue
+            nv = graphic_frame.find(qn("p:nvGraphicFramePr"))
+            if nv is None:
+                continue
+            cnv = nv.find(qn("p:cNvPr"))
+            if cnv is None:
+                continue
+            yield _shape_target(
+                shape_kind=kind,
+                element_name=kind,
                 cnv=cnv,
-                slide_index=slide_idx,
+                slide_idx=slide_idx,
+            )
+        for group in spTree.iter(qn("p:grpSp")):
+            nv = group.find(qn("p:nvGrpSpPr"))
+            if nv is None:
+                continue
+            cnv = nv.find(qn("p:cNvPr"))
+            if cnv is None:
+                continue
+            yield _shape_target(
+                shape_kind="group",
+                element_name="group",
+                cnv=cnv,
+                slide_idx=slide_idx,
             )
 
 
@@ -170,12 +218,9 @@ def _docx_image_targets(doc: DocumentHandle) -> Iterable[_ImageTarget]:
     wp_ns = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
     pic_ns = "http://schemas.openxmlformats.org/drawingml/2006/picture"
 
-    para_idx = 0
-    for para in doc.body.findall(qn("w:p")):
-        para_idx += 1
-        runs = para.findall(qn("w:r"))
-        for run_idx, run in enumerate(runs, start=1):
-            drawings = run.findall(qn("w:drawing"))
+    for para_ref in iter_paragraph_refs(doc.body):
+        for run_ref in iter_run_refs(para_ref.element, para_ref.path):
+            drawings = run_ref.element.findall(qn("w:drawing"))
             if not drawings:
                 continue
             for drawing in drawings:
@@ -197,11 +242,13 @@ def _docx_image_targets(doc: DocumentHandle) -> Iterable[_ImageTarget]:
                     shape_kind="pic",
                     shape_id=doc_pr.get("id") or "0",
                     shape_name=doc_pr.get("name") or "(unnamed)",
-                    officecli_path=f"/body/p[{para_idx}]/r[{run_idx}]",
+                    officecli_path=run_ref.path,
                     alt_text=_raw_alt(doc_pr),
                     cnv=doc_pr,
-                    paragraph=para_idx,
-                    run=run_idx,
+                    paragraph=para_ref.index if para_ref.path.startswith("/body/p[") else None,
+                    run=run_ref.index if run_ref.path.startswith(f"{para_ref.path}/r[") else None,
+                    paragraph_path=para_ref.path,
+                    run_path=run_ref.path,
                 )
 
 
@@ -248,10 +295,9 @@ class AltTextRule(BaseRule):
         for target in _docx_image_targets(doc):
             if not _is_missing_alt(target.alt_text):
                 continue
-            assert target.paragraph is not None
-            assert target.run is not None
+            path_slug = re.sub(r"[^A-Za-z0-9]+", "-", target.officecli_path).strip("-")
             yield Finding(
-                id=f"alt-p{target.paragraph}-r{target.run}",
+                id=f"alt-{path_slug}",
                 rule_id=self.meta.rule_id,
                 severity=self.meta.severity,
                 wcag_sc=self.meta.wcag_sc,
@@ -263,6 +309,8 @@ class AltTextRule(BaseRule):
                     "pic_name": target.shape_name,
                     "paragraph": target.paragraph,
                     "run": target.run,
+                    "paragraph_path": target.paragraph_path,
+                    "run_path": target.run_path,
                 },
             )
 
@@ -315,10 +363,9 @@ class AltTextQualityRule(BaseRule):
             reason = _alt_quality_reason(target.alt_text)
             if reason is None:
                 continue
-            assert target.paragraph is not None
-            assert target.run is not None
+            path_slug = re.sub(r"[^A-Za-z0-9]+", "-", target.officecli_path).strip("-")
             yield Finding(
-                id=f"alt-quality-p{target.paragraph}-r{target.run}",
+                id=f"alt-quality-{path_slug}",
                 rule_id=self.meta.rule_id,
                 severity=self.meta.severity,
                 wcag_sc=self.meta.wcag_sc,
@@ -331,6 +378,8 @@ class AltTextQualityRule(BaseRule):
                     "pic_name": target.shape_name,
                     "paragraph": target.paragraph,
                     "run": target.run,
+                    "paragraph_path": target.paragraph_path,
+                    "run_path": target.run_path,
                     "reason": reason,
                 },
             )

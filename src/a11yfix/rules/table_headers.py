@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from a11yfix.manifest import FileFormat, Finding, Severity
+from a11yfix.ooxml.docx_paths import iter_table_refs
 from a11yfix.ooxml.namespaces import qn
 from a11yfix.rules.base import (
     BaseRule,
@@ -28,7 +29,11 @@ def _row_has_tblheader(tr: object) -> bool:
     trPr = tr.find(qn("w:trPr"))  # type: ignore[union-attr]
     if trPr is None:
         return False
-    return trPr.find(qn("w:tblHeader")) is not None
+    tbl_header = trPr.find(qn("w:tblHeader"))
+    if tbl_header is None:
+        return False
+    val = (tbl_header.get(qn("w:val")) or tbl_header.get("val") or "").lower()
+    return val not in {"0", "false", "off"}
 
 
 def _row_appears_visually_header(tr: object) -> bool:
@@ -45,6 +50,18 @@ def _row_appears_visually_header(tr: object) -> bool:
             shd = tcPr.find(qn("w:shd"))
             if shd is not None and shd.get(qn("w:fill")) not in (None, "auto", "FFFFFF"):
                 return True
+    return False
+
+
+def _ppt_row_appears_visually_header(tr: object) -> bool:
+    for r in tr.iter(qn("a:r")):  # type: ignore[union-attr]
+        rPr = r.find(qn("a:rPr"))
+        if rPr is not None and rPr.get("b") == "1":
+            return True
+    for tc in tr.findall(qn("a:tc")):  # type: ignore[union-attr]
+        tcPr = tc.find(qn("a:tcPr"))
+        if tcPr is not None and tcPr.find(qn("a:solidFill")) is not None:
+            return True
     return False
 
 
@@ -67,7 +84,8 @@ class TableHeaderRule(BaseRule):
         from a11yfix.ooxml.docx_reader import DocxHandle
 
         assert isinstance(doc, DocxHandle)
-        for tbl_idx, tbl in enumerate(doc.body.findall(qn("w:tbl")), start=1):
+        for tbl_ref in iter_table_refs(doc.body):
+            tbl = tbl_ref.element
             rows = list(tbl.findall(qn("w:tr")))
             if not rows:
                 continue
@@ -77,15 +95,16 @@ class TableHeaderRule(BaseRule):
             if _row_has_tblheader(first):
                 continue
             yield Finding(
-                id=f"tbl-hdr-{tbl_idx}",
+                id=f"tbl-hdr-{_path_slug(tbl_ref.path)}",
                 rule_id=self.meta.rule_id,
                 severity=self.meta.severity,
                 wcag_sc=self.meta.wcag_sc,
-                officecli_path=f"/body/tbl[{tbl_idx}]/tr[1]",
+                officecli_path=f"{tbl_ref.path}/tr[1]",
                 current_value="",
                 plain_impact=self.meta.plain_impact,
                 extra={
-                    "table_index": tbl_idx,
+                    "table_index": tbl_ref.index,
+                    "table_path": tbl_ref.path,
                     "visually_header": _row_appears_visually_header(first),
                 },
             )
@@ -111,7 +130,11 @@ class TableHeaderRule(BaseRule):
                     officecli_path=f"/sld[{slide_idx}]/table[{tbl_idx}]",
                     current_value="firstRow=0",
                     plain_impact=self.meta.plain_impact,
-                    extra={"slide_index": slide_idx, "table_index": tbl_idx},
+                    extra={
+                        "slide_index": slide_idx,
+                        "table_index": tbl_idx,
+                        "visually_header": _ppt_row_appears_visually_header(rows[0]),
+                    },
                 )
 
     def fix_deterministic(self, finding: Finding, doc: DocumentHandle) -> list[OfficecliOp] | None:
@@ -126,7 +149,8 @@ class TableHeaderRule(BaseRule):
                     props={"header": "true"},
                 )
             ]
-        # PPT: set firstRow=1 on the table.
+        if not finding.extra.get("visually_header"):
+            return None
         return [
             OfficecliOp(
                 verb="set",
@@ -134,6 +158,10 @@ class TableHeaderRule(BaseRule):
                 props={"firstRow": "1"},
             )
         ]
+
+
+def _path_slug(path: str) -> str:
+    return path.strip("/").replace("/", "-").replace("[", "").replace("]", "")
 
 
 register_rule(TableHeaderRule())

@@ -11,6 +11,7 @@ import re
 from collections.abc import Iterable
 
 from a11yfix.manifest import FileFormat, Finding, Severity
+from a11yfix.ooxml.docx_paths import iter_paragraph_refs
 from a11yfix.ooxml.namespaces import qn
 from a11yfix.rules.base import (
     BaseRule,
@@ -73,10 +74,8 @@ class LinkTextRule(BaseRule):
 
         assert isinstance(doc, DocxHandle)
         rels = _docx_rels(doc)
-        # Match officecli: top-level body paragraphs only.
-        para_idx = 0
-        for p in doc.body.findall(qn("w:p")):
-            para_idx += 1
+        for para_ref in iter_paragraph_refs(doc.body):
+            p = para_ref.element
             para_text = "".join(t.text or "" for t in p.iter(qn("w:t"))).strip()
             for h_idx, h in enumerate(p.iter(qn("w:hyperlink")), start=1):
                 text = "".join(t.text or "" for t in h.iter(qn("w:t")))
@@ -85,15 +84,15 @@ class LinkTextRule(BaseRule):
                 if not _is_generic(text, url=url):
                     continue
                 yield Finding(
-                    id=f"link-p{para_idx}-h{h_idx}",
+                    id=f"link-{_path_slug(para_ref.path)}-h{h_idx}",
                     rule_id=self.meta.rule_id,
                     severity=self.meta.severity,
                     wcag_sc=self.meta.wcag_sc,
-                    officecli_path=f"/body/p[{para_idx}]/hyperlink[{h_idx}]",
+                    officecli_path=f"{para_ref.path}/hyperlink[{h_idx}]",
                     current_value=text.strip(),
                     plain_impact=self.meta.plain_impact,
                     extra={
-                        "paragraph": para_idx,
+                        "paragraph_path": para_ref.path,
                         "rel_id": rel_id,
                         "url": url,
                         "paragraph_text": para_text,
@@ -178,3 +177,7 @@ def _pptx_slide_rels(doc: DocumentHandle) -> dict[int, dict[str, str]]:
 
 
 register_rule(LinkTextRule())
+
+
+def _path_slug(path: str) -> str:
+    return re.sub(r"[^A-Za-z0-9]+", "-", path).strip("-")
