@@ -123,7 +123,11 @@ class OfficecliClient:
             if "ok" not in op and "success" in op:
                 op["ok"] = bool(op["success"])
 
-        success = proc.returncode == 0 and all(op.get("ok", True) for op in per_op)
+        success = (
+            proc.returncode == 0
+            and len(per_op) == len(ops)
+            and all(op.get("ok", False) for op in per_op)
+        )
         return BatchResult(
             success=success,
             per_op=per_op,
@@ -139,8 +143,14 @@ class OfficecliClient:
             return ValidationResult(status="errors", errors=[{"raw": proc.stdout}])
         if isinstance(payload, dict):
             errs = payload.get("errors") or []
+            if proc.returncode != 0 and not errs:
+                errs = [{"raw": proc.stderr.strip() or proc.stdout.strip()}]
             status = "ok" if not errs else "errors"
             return ValidationResult(status=status, errors=list(errs))
+        if proc.returncode != 0:
+            return ValidationResult(
+                status="errors", errors=[{"raw": proc.stderr.strip() or proc.stdout.strip()}]
+            )
         return ValidationResult(status="ok")
 
     def query(self, selector: str) -> list[dict[str, Any]]:

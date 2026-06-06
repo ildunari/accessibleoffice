@@ -15,6 +15,7 @@ import json
 import os
 from collections.abc import Iterable
 from dataclasses import dataclass
+from itertools import zip_longest
 from pathlib import Path
 
 from a11yfix.ai.adapter import VLMAdapter
@@ -135,7 +136,7 @@ def apply_single_shot_fixes(
                     # No image bytes recoverable — defer to stage 4.
                     deferred.append(f)
                     continue
-                img_bytes, mime = extracted
+                img_bytes, _mime = extracted
                 key = f"alttext|{hashlib.sha256(img_bytes).hexdigest()}|{ctx}"
                 cached = _cache_get(key)
                 if cached:
@@ -244,9 +245,10 @@ def apply_single_shot_fixes(
                 )
                 client.restore_from_backup()
                 return SingleShotResult(applied=[], deferred=deferred + [t[0] for t in pending_ops])
-            for (finding, _op, text, conf), op_result in zip(
-                pending_ops, result.per_op or [{}] * len(pending_ops)
-            ):
+            for pending, op_result in zip_longest(pending_ops, result.per_op or []):
+                if pending is None:
+                    continue
+                finding, _op, text, conf = pending
                 ok = (
                     op_result.get("ok", result.success)
                     if isinstance(op_result, dict)

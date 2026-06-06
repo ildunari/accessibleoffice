@@ -114,7 +114,7 @@ def _hard_rules() -> str:
    look like success.
 
 4. Backup-then-write-then-validate, every batch. Backup is created at session
-   start; validate runs after each batch via `officecli verify <file>`; on
+   start; validate runs after each batch via `officecli validate <file>`; on
    validate failure, restore from backup and stop. This is non-negotiable
    because OOXML errors corrupt files in ways that look fine until Word
    refuses to open them.
@@ -163,11 +163,11 @@ intended operations.
 **Phase 3 — Verify.**
 You collect subagent outputs. For each batch:
   1. Apply intended operations via officecli (one batched write).
-  2. Run `officecli verify <file>` to confirm the file still parses.
+  2. Run `officecli validate <file>` to confirm the file still parses.
   3. Run a targeted re-check against the manifest's residual finding ids:
      each one should now resolve, or be explicitly marked "not fixable
      deterministically — needs author judgment".
-  4. If verify fails, restore from backup, narrow the batch to a single
+  4. If validate fails, restore from backup, narrow the batch to a single
      finding, and retry. If retry fails twice, skip the batch and continue
      — flag it in the final report.
 
@@ -184,10 +184,10 @@ Emit a JSON summary at the end: total findings, fixed-deterministic,
 fixed-with-judgment, deferred-to-author, errors. Write it to the manifest
 sibling at `<file>.stage4.report.json`. The CLI reads this and exits.
 
-**Verification cadence (non-negotiable):**
-- Never apply >1 batch without running `officecli verify`.
+**Validation cadence (non-negotiable):**
+- Never apply >1 batch without running `officecli validate`.
 - Never claim a finding fixed without re-checking it against the rule.
-- Never proceed past a verify failure; the hooks will block you anyway.
+- Never proceed past a validation failure; the hooks will block you anyway.
 
 **Loop safety:**
 - If you find yourself writing the same property to the same target twice,
@@ -257,14 +257,14 @@ Available subagent models for this session:
 The session should emit, in order:
   1. The grouped plan (markdown, one paragraph per batch).
   2. Subagent dispatch summary per batch.
-  3. Verify result per batch.
+  3. Validate result per batch.
   4. The final JSON report at `<file>.stage4.report.json` matching:
      {{
        "file": "...",
        "manifest": "...",
        "totals": {{"detected": N, "fixed_deterministic": N,
                    "fixed_with_judgment": N, "deferred": N, "errors": N}},
-       "batches": [{{"rule_id": "...", "ops": N, "verify": "ok|fail",
+       "batches": [{{"rule_id": "...", "ops": N, "validate": "ok|fail",
                      "deferred": [...]}}],
        "review_notes": [...]
      }}
@@ -294,10 +294,17 @@ def _write_session_hooks(session_dir: Path, edit_cap: int = DEFAULT_EDIT_CAP) ->
     pre_tool = session_dir / "pre_tool.py"
     pre_tool.write_text(
         f"""#!/usr/bin/env python3
-import json, sys, pathlib, hashlib
+import json, sys, pathlib, hashlib, re, shlex
 STATE = pathlib.Path({str(state)!r})
 LOG   = pathlib.Path({str(log)!r})
 CAP   = {edit_cap}
+OFFICECLI_MUTATORS = {{'set','add','remove','move','swap','raw-set','batch','save','create','new','merge','import','add-part'}}
+SHELL_MUTATORS = {{'cp','mv','rm','rmdir','mkdir','touch','chmod','chown','python','python3','pip','uv','npm','pnpm','yarn','cargo','git','sed','perl'}}
+OFFICECLI_MUTATOR_RE = re.compile(
+    r'(^|[;&|]\\s*|&&\\s*|\\|\\|\\s*)(?:env\\s+(?:\\S+\\s+)*)?(?:[A-Za-z_][A-Za-z0-9_]*=\\S+\\s+)*officecli\\s+('
+    + '|'.join(re.escape(v) for v in sorted(OFFICECLI_MUTATORS, key=len, reverse=True))
+    + r')\\b'
+)
 data = json.loads(sys.stdin.read() or '{{}}')
 tool = data.get('tool_name', '')
 inp  = data.get('tool_input', {{}}) or {{}}
@@ -307,7 +314,36 @@ state = json.loads(STATE.read_text())
 calls = state.setdefault('calls', {{}})
 n = calls.get(key, 0)
 calls[key] = n + 1
-write_like = tool in ('Bash','Edit','Write','MultiEdit') or 'set' in text or 'apply' in text
+def bash_command(inp):
+    if isinstance(inp, dict):
+        for k in ('command', 'cmd', 'script'):
+            if isinstance(inp.get(k), str):
+                return inp[k]
+    return ''
+def is_write_like(tool, inp, text):
+    if tool in ('Edit','Write','MultiEdit'):
+        return True
+    if tool != 'Bash':
+        return False
+    cmd = bash_command(inp).strip()
+    if not cmd:
+        return False
+    if OFFICECLI_MUTATOR_RE.search(cmd):
+        return True
+    if re.search(r'(^|\\s)(>|>>|2>|&>)', cmd):
+        return True
+    try:
+        parts = shlex.split(cmd)
+    except ValueError:
+        return any(tok in cmd for tok in (' officecli batch ', ' officecli set ', ' officecli raw-set '))
+    if not parts:
+        return False
+    exe = pathlib.Path(parts[0]).name
+    if exe == 'officecli':
+        verb = parts[1] if len(parts) > 1 else ''
+        return verb in OFFICECLI_MUTATORS
+    return exe in SHELL_MUTATORS
+write_like = is_write_like(tool, inp, text)
 # Loop guard: same call >2x is blocked.
 if n >= 2 and write_like:
     LOG.open('a').write(f'[loop-block] {{tool}} repeated {{n+1}}x — blocking\\n')
@@ -321,7 +357,7 @@ if write_like:
         print(json.dumps({{'permissionDecision':'deny','permissionDecisionReason':f'edit cap reached ({{CAP}}). Write report and exit.'}}))
         STATE.write_text(json.dumps(state))
         sys.exit(0)
-    # Reset verify counter on any new write.
+    # Reset validation counter on any new write.
     state['verifies_since_write'] = 0
 STATE.write_text(json.dumps(state))
 print(json.dumps({{'permissionDecision':'allow'}}))
@@ -337,9 +373,32 @@ STATE = pathlib.Path({str(state)!r})
 LOG   = pathlib.Path({str(log)!r})
 data = json.loads(sys.stdin.read() or '{{}}')
 tool = data.get('tool_name', '')
-inp  = json.dumps(data.get('tool_input', {{}}) or {{}}, sort_keys=True)
+tool_input = data.get('tool_input', {{}}) or {{}}
+inp  = json.dumps(tool_input, sort_keys=True)
 state = json.loads(STATE.read_text())
-if tool == 'Bash' and ('officecli verify' in inp or 'officecli vrf' in inp):
+def bash_command(inp):
+    if isinstance(inp, dict):
+        for k in ('command', 'cmd', 'script'):
+            if isinstance(inp.get(k), str):
+                return inp[k]
+    return ''
+def command_validates(cmd):
+    return bool(__import__('re').search(r'(^|[;&|]\\s*|&&\\s*|\\|\\|\\s*)officecli\\s+(validate|verify|vrf)\\b', cmd))
+def tool_succeeded(data):
+    response = data.get('tool_response', data.get('tool_output', data.get('result', {{}})))
+    if isinstance(response, dict):
+        for k in ('exit_code', 'exitCode', 'status'):
+            if k in response:
+                return response[k] in (0, '0', 'success', 'ok')
+        if response.get('error') or response.get('stderr'):
+            return False
+    text = json.dumps(response, sort_keys=True)
+    if '"exit_code": 0' in text or '"exitCode": 0' in text:
+        return True
+    if '"exit_code":' in text or '"exitCode":' in text or 'error' in text.lower():
+        return False
+    return False
+if tool == 'Bash' and command_validates(bash_command(tool_input)) and tool_succeeded(data):
     state['verifies_since_write'] = state.get('verifies_since_write', 0) + 1
     LOG.open('a').write(f'[verify-ok] verifies_since_write={{state["verifies_since_write"]}}\\n')
 STATE.write_text(json.dumps(state))
@@ -354,10 +413,10 @@ import json, sys, pathlib
 STATE = pathlib.Path({str(state)!r})
 LOG   = pathlib.Path({str(log)!r})
 state = json.loads(STATE.read_text())
-# If there have been writes but no verify since the last one, refuse to stop.
+# If there have been writes but no validate since the last one, refuse to stop.
 if state.get('writes', 0) > 0 and state.get('verifies_since_write', 0) == 0:
-    LOG.open('a').write('[stop-block] writes happened without a verify; forcing continuation\\n')
-    print(json.dumps({{'decision':'block','reason':'writes happened without verify. Run `officecli verify <file>` then emit the stage4.report.json before stopping.'}}))
+    LOG.open('a').write('[stop-block] writes happened without a validate; forcing continuation\\n')
+    print(json.dumps({{'decision':'block','reason':'writes happened without validate. Run `officecli validate <file>` then emit the stage4.report.json before stopping.'}}))
     sys.exit(0)
 print(json.dumps({{}}))
 """

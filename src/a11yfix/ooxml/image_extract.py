@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import zipfile
 from pathlib import Path
-
 from typing import Any
 
 from lxml import etree
@@ -106,31 +105,38 @@ def _extract_pptx(doc: DocumentHandle, finding: Finding) -> tuple[bytes, str] | 
     slide_xml = doc.slides_xml[slide_idx - 1]
     shape_id = str(finding.officecli_path).rsplit("=", 1)[-1].rstrip("]")
     target = ""
-    # Find p:pic with matching cNvPr@id then read its blip
-    for pic in slide_xml.iter(qn("p:pic")):
-        cnv = pic.find(f"{qn('p:nvPicPr')}/{qn('p:cNvPr')}")
-        if cnv is None:
-            continue
-        if shape_id and cnv.get("id") != shape_id:
-            continue
-        blip = None
-        for child in pic.iter():
-            if etree.QName(child.tag).localname == "blip":
-                blip = child
-                break
-        if blip is None:
-            continue
-        embed = blip.get(f"{{{_R_NS}}}embed") or blip.get("embed") or ""
-        if not embed:
-            continue
-        try:
-            slide_part = doc.pptx.slides[slide_idx - 1].part
-            for rel in slide_part.rels.values():
-                if rel.rId == embed:
-                    target = str(rel.target_ref or "")
+    # Find p:pic or image-filled p:sp with matching cNvPr@id then read its blip.
+    candidates = [
+        (qn("p:pic"), f"{qn('p:nvPicPr')}/{qn('p:cNvPr')}"),
+        (qn("p:sp"), f"{qn('p:nvSpPr')}/{qn('p:cNvPr')}"),
+    ]
+    for tag, cnv_path in candidates:
+        for el in slide_xml.iter(tag):
+            cnv = el.find(cnv_path)
+            if cnv is None:
+                continue
+            if shape_id and cnv.get("id") != shape_id:
+                continue
+            blip = None
+            for child in el.iter():
+                if etree.QName(child.tag).localname == "blip":
+                    blip = child
                     break
-        except Exception:
-            return None
+            if blip is None:
+                continue
+            embed = blip.get(f"{{{_R_NS}}}embed") or blip.get("embed") or ""
+            if not embed:
+                continue
+            try:
+                slide_part = doc.pptx.slides[slide_idx - 1].part
+                for rel in slide_part.rels.values():
+                    if rel.rId == embed:
+                        target = str(rel.target_ref or "")
+                        break
+            except Exception:
+                return None
+            if target:
+                break
         if target:
             break
     if not target:

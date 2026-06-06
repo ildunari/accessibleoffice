@@ -36,7 +36,7 @@ def test_embedded_path_when_no_skill(tmp_path, monkeypatch):
     cmd = stage4.render_launch_command(plan)
     assert "--skill" not in cmd
     assert "--settings" in cmd
-    assert "claude" == cmd[0]
+    assert cmd[0] == "claude"
 
 
 def test_skill_path_when_skill_present(tmp_path, monkeypatch):
@@ -81,6 +81,129 @@ def test_hooks_enforce_loop_guard(tmp_path):
     assert decisions[0] == "allow"
     assert decisions[1] == "allow"
     assert decisions[2] == "deny"
+
+
+def test_hooks_do_not_treat_read_only_bash_as_write(tmp_path):
+    file_path = tmp_path / "doc.docx"
+    file_path.write_bytes(b"x")
+    manifest = _fake_manifest(tmp_path, FileFormat.DOCX)
+    plan = stage4.build_launch_plan(file_path, manifest, force_embedded=True)
+
+    assert plan.settings_path is not None
+    settings = json.loads(plan.settings_path.read_text())
+    pre_tool = Path(settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"])
+    stop_hook = Path(settings["hooks"]["Stop"][0]["hooks"][0]["command"])
+
+    import subprocess
+
+    for command in ("officecli help pptx set pic", "officecli validate deck.pptx", "ls -la"):
+        payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
+        out = subprocess.run(
+            [str(pre_tool)], input=payload, capture_output=True, text=True, check=False
+        )
+        assert json.loads(out.stdout)["permissionDecision"] == "allow"
+
+    out = subprocess.run([str(stop_hook)], capture_output=True, text=True, check=False)
+    assert json.loads(out.stdout) == {}
+
+
+def test_hooks_accept_validate_after_write(tmp_path):
+    file_path = tmp_path / "doc.docx"
+    file_path.write_bytes(b"x")
+    manifest = _fake_manifest(tmp_path, FileFormat.DOCX)
+    plan = stage4.build_launch_plan(file_path, manifest, force_embedded=True)
+
+    assert plan.settings_path is not None
+    settings = json.loads(plan.settings_path.read_text())
+    pre_tool = Path(settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"])
+    post_tool = Path(settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"])
+    stop_hook = Path(settings["hooks"]["Stop"][0]["hooks"][0]["command"])
+
+    import subprocess
+
+    write_payload = json.dumps(
+        {"tool_name": "Bash", "tool_input": {"command": "officecli batch deck.pptx --input ops.json"}}
+    )
+    subprocess.run([str(pre_tool)], input=write_payload, capture_output=True, text=True, check=False)
+
+    blocked = subprocess.run([str(stop_hook)], capture_output=True, text=True, check=False)
+    assert json.loads(blocked.stdout)["decision"] == "block"
+
+    validate_payload = json.dumps(
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": "officecli validate deck.pptx --json"},
+            "tool_response": {"exit_code": 0},
+        }
+    )
+    subprocess.run(
+        [str(post_tool)], input=validate_payload, capture_output=True, text=True, check=False
+    )
+
+    allowed = subprocess.run([str(stop_hook)], capture_output=True, text=True, check=False)
+    assert json.loads(allowed.stdout) == {}
+
+
+def test_hooks_reject_failed_validate_after_write(tmp_path):
+    file_path = tmp_path / "doc.docx"
+    file_path.write_bytes(b"x")
+    manifest = _fake_manifest(tmp_path, FileFormat.DOCX)
+    plan = stage4.build_launch_plan(file_path, manifest, force_embedded=True)
+
+    assert plan.settings_path is not None
+    settings = json.loads(plan.settings_path.read_text())
+    pre_tool = Path(settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"])
+    post_tool = Path(settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"])
+    stop_hook = Path(settings["hooks"]["Stop"][0]["hooks"][0]["command"])
+
+    import subprocess
+
+    write_payload = json.dumps(
+        {"tool_name": "Bash", "tool_input": {"command": "officecli batch deck.pptx --input ops.json"}}
+    )
+    subprocess.run([str(pre_tool)], input=write_payload, capture_output=True, text=True, check=False)
+
+    failed_validate_payload = json.dumps(
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": "officecli validate deck.pptx --json"},
+            "tool_response": {"exit_code": 2, "stderr": "invalid"},
+        }
+    )
+    subprocess.run(
+        [str(post_tool)], input=failed_validate_payload, capture_output=True, text=True, check=False
+    )
+
+    blocked = subprocess.run([str(stop_hook)], capture_output=True, text=True, check=False)
+    assert json.loads(blocked.stdout)["decision"] == "block"
+
+
+def test_hooks_treat_wrapped_officecli_mutation_as_write(tmp_path):
+    file_path = tmp_path / "doc.docx"
+    file_path.write_bytes(b"x")
+    manifest = _fake_manifest(tmp_path, FileFormat.DOCX)
+    plan = stage4.build_launch_plan(file_path, manifest, force_embedded=True)
+
+    assert plan.settings_path is not None
+    settings = json.loads(plan.settings_path.read_text())
+    pre_tool = Path(settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"])
+    stop_hook = Path(settings["hooks"]["Stop"][0]["hooks"][0]["command"])
+
+    import subprocess
+
+    wrapped_write = json.dumps(
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": "cd /tmp && A11YFIX=1 officecli batch deck.pptx --input ops.json"},
+        }
+    )
+    out = subprocess.run(
+        [str(pre_tool)], input=wrapped_write, capture_output=True, text=True, check=False
+    )
+    assert json.loads(out.stdout)["permissionDecision"] == "allow"
+
+    blocked = subprocess.run([str(stop_hook)], capture_output=True, text=True, check=False)
+    assert json.loads(blocked.stdout)["decision"] == "block"
 
 
 def test_skill_probe_is_silent_on_missing_claude(monkeypatch):

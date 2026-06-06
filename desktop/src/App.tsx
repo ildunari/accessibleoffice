@@ -106,7 +106,7 @@ interface BatchSummary {
 const MODE_DESCRIPTIONS: Record<Mode, { title: string; subtitle: string }> = {
   scan: { title: "Scan", subtitle: "Detect issues. No writes." },
   auto: { title: "Auto-fix", subtitle: "Deterministic only. Fast, no AI." },
-  full: { title: "Full", subtitle: "Detect + fix + agent (Claude Code)." },
+  full: { title: "AI fix + agent plan", subtitle: "AI fixes, then prints the Claude launch command." },
 };
 
 const SEVERITY_COLOR: Record<Severity, string> = {

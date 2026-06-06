@@ -16,10 +16,13 @@ Code use.
 from __future__ import annotations
 
 import os
+import pickle
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 
 import click
 
@@ -32,7 +35,6 @@ from a11yfix.manifest import (
 )
 from a11yfix.reporting.json_writer import write_manifest
 from a11yfix.reporting.terminal import print_report
-
 
 # -----------------------------------------------------------------------------
 # Single-file helpers
@@ -315,6 +317,17 @@ def _strict_exit(manifest: Manifest, strict: bool, strict_warnings: bool) -> int
 PER_FILE_TIMEOUT_SEC = 180
 
 
+def _process_one_file_worker(kwargs: dict[str, object], result_path: str) -> None:
+    """Multiprocessing target for killable per-file batch execution."""
+    try:
+        result = _process_one_file(**cast(Any, kwargs))
+        payload = ("ok", result)
+    except BaseException as exc:  # pragma: no cover - defensive worker boundary
+        payload = ("err", f"{type(exc).__name__}: {exc}")
+    with Path(result_path).open("wb") as f:
+        pickle.dump(payload, f)
+
+
 def _run_batch(
     state_dir: Path,
     *,
@@ -394,27 +407,37 @@ def _run_batch(
 
             cost_before = meter.total()
             manifest_out = f.parent / f"{f.stem}.manifest.json"
-            import concurrent.futures
+            import multiprocessing
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                future = pool.submit(
-                    _process_one_file,
-                    f,
-                    report_only=report_only,
-                    auto_only=local_auto_only,
-                    output=manifest_out,
-                    rules_csv=rules_csv,
-                    skip_csv=skip_csv,
-                    default_lang=default_lang,
-                    vlm=vlm,
-                    remediate=False,  # never spawn interactive in batch
-                    remediate_model="claude-sonnet-4-6",
-                    dry_run=True,
-                    print_to_terminal=False,
-                )
-                try:
-                    result = future.result(timeout=per_file_timeout)
-                except concurrent.futures.TimeoutError:
+            ctx = multiprocessing.get_context()
+            fd, result_tmp = tempfile.mkstemp(
+                prefix="a11yfix-worker-", suffix=".pkl", dir=str(state_dir)
+            )
+            os.close(fd)
+            worker_kwargs = {
+                "file": f,
+                "report_only": report_only,
+                "auto_only": local_auto_only,
+                "output": manifest_out,
+                "rules_csv": rules_csv,
+                "skip_csv": skip_csv,
+                "default_lang": default_lang,
+                "vlm": vlm,
+                "remediate": False,  # never spawn interactive in batch
+                "remediate_model": "claude-sonnet-4-6",
+                "dry_run": True,
+                "print_to_terminal": False,
+            }
+            try:
+                proc = ctx.Process(target=_process_one_file_worker, args=(worker_kwargs, result_tmp))
+                proc.start()
+                proc.join(per_file_timeout)
+                if proc.is_alive():
+                    proc.terminate()
+                    proc.join(5)
+                    if proc.is_alive() and hasattr(proc, "kill"):
+                        proc.kill()
+                        proc.join(2)
                     record_progress(
                         state_dir,
                         shard.id,
@@ -429,18 +452,29 @@ def _run_batch(
                         err=True,
                     )
                     continue
-                except Exception as exc:
+                try:
+                    with Path(result_tmp).open("rb") as rf:
+                        status, payload = pickle.load(rf)
+                except (EOFError, OSError, pickle.PickleError):
+                    status, payload = (
+                        "err",
+                        f"worker exited {proc.exitcode} without returning a result",
+                    )
+                if status == "err":
                     record_progress(
                         state_dir,
                         shard.id,
                         file=str(f),
                         status="failed",
-                        error=f"{type(exc).__name__}: {exc}",
+                        error=str(payload),
                         cost_usd=meter.total() - cost_before,
                     )
                     grand_failed += 1
-                    click.echo(f"  [fail] {f.name}: {exc}", err=True)
+                    click.echo(f"  [fail] {f.name}: {payload}", err=True)
                     continue
+                result = cast(FileResult, payload)
+            finally:
+                Path(result_tmp).unlink(missing_ok=True)
 
             cost_delta = meter.total() - cost_before
             if result.error and result.manifest is None:

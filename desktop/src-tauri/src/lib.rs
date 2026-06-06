@@ -12,6 +12,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tauri::path::BaseDirectory;
 use walkdir::WalkDir;
 
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+
 const CLI_NAME: &str = "accessibleoffice";
 const LEGACY_CLI_NAME: &str = "a11yfix";
 const CLAUDE_CLI: &str = "claude";
@@ -623,6 +626,14 @@ fn manifest_path_for(file_path: &str) -> PathBuf {
     PathBuf::from(file_path).with_extension(suffix)
 }
 
+#[cfg(unix)]
+fn configure_command_for_cancel(cmd: &mut Command) {
+    cmd.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn configure_command_for_cancel(_cmd: &mut Command) {}
+
 #[tauri::command]
 async fn run_a11yfix(
     app: AppHandle,
@@ -671,6 +682,7 @@ async fn run_a11yfix(
             "Full mode prints the orchestrator launch command. Copy it into a terminal to execute. The embedded fallback runs even if the fixing-office-accessibility skill isn't installed.",
         );
     }
+    configure_command_for_cancel(&mut cmd);
 
     let mut child = cmd.spawn().map_err(|e| format!("spawn failed: {e}"))?;
     let pid = child.id();
@@ -887,6 +899,7 @@ async fn run_batch(
         cmd.arg("--max-cost-total-usd").arg(format!("{cap}"));
     }
     if mode == "full" {
+        cmd.arg("--dry-run");
         // Batch mode in the CLI never spawns interactive Claude Code; ensure the
         // user knows the agent step is dry-run only here.
         let _ = app.emit(
@@ -895,10 +908,17 @@ async fn run_batch(
         );
     }
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    configure_command_for_cancel(&mut cmd);
 
     let _ = app.emit(
         "a11yfix-log",
-        format!("$ {} --folder {} --mode {}", binary.display(), folder_path, mode),
+        format!(
+            "$ {} --folder {} --mode {}{}",
+            binary.display(),
+            folder_path,
+            mode,
+            if mode == "full" { " --dry-run" } else { "" }
+        ),
     );
 
     let mut child = cmd.spawn().map_err(|e| format!("spawn failed: {e}"))?;
@@ -978,7 +998,7 @@ async fn cancel_run(state: State<'_, RunState>, run_id: String) -> Result<(), St
     };
     #[cfg(unix)]
     {
-        let _ = Command::new("kill").arg(pid.to_string()).status();
+        terminate_process_tree(pid);
     }
     #[cfg(windows)]
     {
@@ -987,6 +1007,38 @@ async fn cancel_run(state: State<'_, RunState>, run_id: String) -> Result<(), St
             .status();
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn collect_descendants(pid: u32, out: &mut Vec<u32>) {
+    let Ok(output) = Command::new("pgrep").args(["-P", &pid.to_string()]).output() else {
+        return;
+    };
+    if !output.status.success() {
+        return;
+    }
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let Ok(child) = line.trim().parse::<u32>() else {
+            continue;
+        };
+        collect_descendants(child, out);
+        out.push(child);
+    }
+}
+
+#[cfg(unix)]
+fn terminate_process_tree(pid: u32) {
+    let mut pids = Vec::new();
+    collect_descendants(pid, &mut pids);
+    pids.push(pid);
+    let process_group = format!("-{pid}");
+    for signal in ["-TERM", "-KILL"] {
+        let _ = Command::new("kill").arg(signal).arg(&process_group).status();
+        for child in &pids {
+            let _ = Command::new("kill").arg(signal).arg(child.to_string()).status();
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
 }
 
 #[tauri::command]

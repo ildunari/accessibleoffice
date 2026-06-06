@@ -1,12 +1,10 @@
-"""Rule: missing alt text on pictures, shapes, charts, groups, smartart.
+"""Rule: missing alt text on pictures and image-filled shapes.
 
 WCAG 1.1.1 (Non-text Content). Severity: Error.
 
 OOXML elements inspected (PPT):
   - p:pic / p:nvPicPr / p:cNvPr  (picture: @descr or @title)
-  - p:sp  / p:nvSpPr  / p:cNvPr  (shape, often used for inline images)
-  - p:graphicFrame / p:nvGraphicFramePr / p:cNvPr  (chart, smartart, table)
-  - p:grpSp / p:nvGrpSpPr / p:cNvPr  (group)
+  - p:sp with p:spPr/a:blipFill / p:nvSpPr / p:cNvPr  (image-filled shape)
 
 OOXML elements inspected (Word):
   - w:drawing/wp:inline (or wp:anchor) / a:graphic / a:graphicData
@@ -65,6 +63,13 @@ def _alt_text(cnvpr: object) -> str:
     return descr.strip() if not _is_meaningless_alt(descr) else ""
 
 
+def _has_blip_fill(el: object) -> bool:
+    sp_pr = el.find(qn("p:spPr"))  # type: ignore[union-attr]
+    if sp_pr is None:
+        return False
+    return sp_pr.find(qn("a:blipFill")) is not None
+
+
 class AltTextRule(BaseRule):
     meta = RuleMeta(
         rule_id="alt-text-missing",
@@ -90,55 +95,60 @@ class AltTextRule(BaseRule):
             spTree = slide_xml.find(f".//{qn('p:cSld')}/{qn('p:spTree')}")
             if spTree is None:
                 continue
-            for shape_kind, container_tag, nv_tag in [
-                ("pic", "p:pic", "p:nvPicPr"),
-                ("sp", "p:sp", "p:nvSpPr"),
-                ("graphicFrame", "p:graphicFrame", "p:nvGraphicFramePr"),
-                ("grpSp", "p:grpSp", "p:nvGrpSpPr"),
-            ]:
-                for el in spTree.iter(qn(container_tag)):
-                    nv = el.find(qn(nv_tag))
-                    if nv is None:
-                        continue
-                    cnv = nv.find(qn("p:cNvPr"))
-                    if cnv is None:
-                        continue
-                    if _is_decorative(cnv):
-                        continue
-                    # Skip placeholder shapes — those are titles/body, not images.
-                    if shape_kind == "sp":
-                        nvSpPr = nv.find(qn("p:nvSpPr"))
-                        if nvSpPr is not None:
-                            nvPr = nv.find(qn("p:nvPr"))
-                            if nvPr is not None and nvPr.find(qn("p:ph")) is not None:
-                                continue
-                        # Also skip plain text boxes that don't contain media — they're text content.
-                        if (
-                            shape_kind == "sp"
-                            and el.find(qn("p:nvSpPr") + "/" + qn("p:cNvSpPr")) is not None
-                        ):
-                            # heuristic: has it got embedded media via blipFill? if not, skip
-                            pass
-                    if _alt_text(cnv):
-                        continue
-                    shape_id = cnv.get("id") or "0"
-                    shape_name = cnv.get("name") or "(unnamed)"
-                    # Use 1-based [@id=] addressing where possible
-                    path = f"/sld[{slide_idx}]/{shape_kind}[@id={shape_id}]"
-                    yield Finding(
-                        id=f"alt-{slide_idx}-{shape_kind}-{shape_id}",
-                        rule_id=self.meta.rule_id,
-                        severity=self.meta.severity,
-                        wcag_sc=self.meta.wcag_sc,
-                        officecli_path=path,
-                        current_value="",
-                        plain_impact=self.meta.plain_impact,
-                        extra={
-                            "shape_kind": shape_kind,
-                            "shape_name": shape_name,
-                            "slide_index": slide_idx,
-                        },
-                    )
+            for pic in spTree.iter(qn("p:pic")):
+                nv = pic.find(qn("p:nvPicPr"))
+                if nv is None:
+                    continue
+                cnv = nv.find(qn("p:cNvPr"))
+                if cnv is None:
+                    continue
+                if _is_decorative(cnv) or _alt_text(cnv):
+                    continue
+                shape_id = cnv.get("id") or "0"
+                shape_name = cnv.get("name") or "(unnamed)"
+                path = f"/sld[{slide_idx}]/pic[@id={shape_id}]"
+                yield Finding(
+                    id=f"alt-{slide_idx}-pic-{shape_id}",
+                    rule_id=self.meta.rule_id,
+                    severity=self.meta.severity,
+                    wcag_sc=self.meta.wcag_sc,
+                    officecli_path=path,
+                    current_value="",
+                    plain_impact=self.meta.plain_impact,
+                    extra={
+                        "shape_kind": "pic",
+                        "shape_name": shape_name,
+                        "slide_index": slide_idx,
+                    },
+                )
+            for sp in spTree.iter(qn("p:sp")):
+                if not _has_blip_fill(sp):
+                    continue
+                nv = sp.find(qn("p:nvSpPr"))
+                if nv is None:
+                    continue
+                cnv = nv.find(qn("p:cNvPr"))
+                if cnv is None:
+                    continue
+                if _is_decorative(cnv) or _alt_text(cnv):
+                    continue
+                shape_id = cnv.get("id") or "0"
+                shape_name = cnv.get("name") or "(unnamed)"
+                path = f"/sld[{slide_idx}]/sp[@id={shape_id}]"
+                yield Finding(
+                    id=f"alt-{slide_idx}-sp-{shape_id}",
+                    rule_id=self.meta.rule_id,
+                    severity=self.meta.severity,
+                    wcag_sc=self.meta.wcag_sc,
+                    officecli_path=path,
+                    current_value="",
+                    plain_impact=self.meta.plain_impact,
+                    extra={
+                        "shape_kind": "sp",
+                        "shape_name": shape_name,
+                        "slide_index": slide_idx,
+                    },
+                )
 
     # --- DOCX ---
 

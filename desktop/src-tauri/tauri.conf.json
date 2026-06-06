@@ -49,7 +49,9 @@
       "resources/accessibleoffice-*.whl"
     ],
     "macOS": {
-      "minimumSystemVersion": "12.0"
+      "minimumSystemVersion": "12.0",
+      "signingIdentity": "Developer ID Application: Kosta Milovanovic (SV9Z2RG2A6)",
+      "entitlements": "entitlements.plist"
     },
     "windows": {
       "wix": {

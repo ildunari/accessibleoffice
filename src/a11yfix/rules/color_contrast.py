@@ -49,6 +49,53 @@ def _color_from_solid(solid: object, resolver: ThemeColorResolver) -> RGB | None
     return None
 
 
+def _solid_fill_color(parent: object, resolver: ThemeColorResolver) -> RGB | None:
+    solid = parent.find(qn("a:solidFill"))  # type: ignore[union-attr]
+    if solid is None:
+        return None
+    return _color_from_solid(solid, resolver)
+
+
+def _color_from_color_parent(parent: object, resolver: ThemeColorResolver) -> RGB | None:
+    srgb = parent.find(qn("a:srgbClr"))  # type: ignore[union-attr]
+    if srgb is not None:
+        return resolver.resolve_srgb(srgb.get("val") or "000000")
+    scheme = parent.find(qn("a:schemeClr"))  # type: ignore[union-attr]
+    if scheme is not None:
+        lum_mod = lum_off = None
+        for child in scheme:
+            if child.tag.endswith("}lumMod"):
+                lum_mod = int(child.get("val") or "100000") / 100000.0
+            elif child.tag.endswith("}lumOff"):
+                lum_off = int(child.get("val") or "0") / 100000.0
+        return resolver.resolve_scheme(scheme.get("val") or "bg1", lum_mod=lum_mod, lum_off=lum_off)
+    return None
+
+
+def _slide_background(slide_xml: object, resolver: ThemeColorResolver) -> RGB | None:
+    bg = slide_xml.find(f".//{qn('p:cSld')}/{qn('p:bg')}")
+    if bg is None:
+        return None
+    bg_pr = bg.find(qn("p:bgPr"))
+    if bg_pr is not None:
+        color = _solid_fill_color(bg_pr, resolver)
+        if color is not None:
+            return color
+    bg_ref = bg.find(qn("p:bgRef"))
+    if bg_ref is not None:
+        color = _color_from_color_parent(bg_ref, resolver)
+        if color is not None:
+            return color
+    return None
+
+
+def _shape_background(sp: object, resolver: ThemeColorResolver) -> RGB | None:
+    sp_pr = sp.find(qn("p:spPr"))  # type: ignore[union-attr]
+    if sp_pr is None:
+        return None
+    return _solid_fill_color(sp_pr, resolver)
+
+
 class ColorContrastRule(BaseRule):
     meta = RuleMeta(
         rule_id="color-contrast",
@@ -66,8 +113,9 @@ class ColorContrastRule(BaseRule):
         assert isinstance(doc, PptxHandle)
         resolver = ThemeColorResolver()
         for slide_idx, slide_xml in enumerate(doc.slides_xml, start=1):
-            bg = WHITE  # assume white slide background unless we resolve otherwise
+            slide_bg = _slide_background(slide_xml, resolver) or WHITE
             for sp_idx, sp in enumerate(slide_xml.iter(qn("p:sp")), start=1):
+                bg = _shape_background(sp, resolver) or slide_bg
                 for r_idx, r in enumerate(sp.iter(qn("a:r")), start=1):
                     rPr = r.find(qn("a:rPr"))
                     if rPr is None:

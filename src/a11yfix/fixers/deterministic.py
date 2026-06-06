@@ -6,6 +6,7 @@ Auto-revert on validate failure. Idempotent: skips findings already addressed.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from itertools import zip_longest
 
 from a11yfix.manifest import AppliedFix, Finding
 from a11yfix.ooxml.officecli import OfficecliClient, OfficecliError
@@ -94,9 +95,10 @@ def apply_deterministic_fixes(
                     backup_path=backup_path,
                 )
 
-            for (finding, op), op_result in zip(
-                pending_ops, result.per_op or [{}] * len(pending_ops)
-            ):
+            for pending, op_result in zip_longest(pending_ops, result.per_op or []):
+                if pending is None:
+                    continue
+                finding, op = pending
                 ok = (
                     op_result.get("ok", result.success)
                     if isinstance(op_result, dict)
