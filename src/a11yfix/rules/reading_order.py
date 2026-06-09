@@ -23,17 +23,29 @@ def _emu(val: str | None) -> int:
         return 0
 
 
-def _shape_position(sp: object) -> tuple[int, int]:
-    """Return (top, left) in EMUs from spPr/xfrm/off."""
-    spPr = sp.find(qn("p:spPr"))  # type: ignore[union-attr]
-    if spPr is None:
-        return (0, 0)
-    xfrm = spPr.find(qn("a:xfrm"))
+def _shape_position(el: object) -> tuple[int, int] | None:
+    """Return (top, left) in EMUs, or None when the shape has no explicit
+    position (e.g. a placeholder inheriting geometry from its layout).
+
+    Handles the spTree child kinds that occupy slide real estate:
+      - p:sp / p:pic   -> p:spPr/a:xfrm/a:off
+      - p:graphicFrame -> p:xfrm/a:off (xfrm is a direct child)
+      - p:grpSp        -> p:grpSpPr/a:xfrm/a:off
+    """
+    tag = el.tag  # type: ignore[union-attr]
+    if tag.endswith("}graphicFrame"):
+        xfrm = el.find(qn("p:xfrm"))  # type: ignore[union-attr]
+    elif tag.endswith("}grpSp"):
+        grp_pr = el.find(qn("p:grpSpPr"))  # type: ignore[union-attr]
+        xfrm = grp_pr.find(qn("a:xfrm")) if grp_pr is not None else None
+    else:
+        spPr = el.find(qn("p:spPr"))  # type: ignore[union-attr]
+        xfrm = spPr.find(qn("a:xfrm")) if spPr is not None else None
     if xfrm is None:
-        return (0, 0)
+        return None
     off = xfrm.find(qn("a:off"))
     if off is None:
-        return (0, 0)
+        return None
     return (_emu(off.get("y")), _emu(off.get("x")))
 
 
@@ -54,13 +66,19 @@ class ReadingOrderRule(BaseRule):
             spTree = slide_xml.find(f".//{qn('p:cSld')}/{qn('p:spTree')}")
             if spTree is None:
                 continue
-            # Collect non-placeholder, non-decorative shapes with positions
+            # Collect positioned shapes: sp, pic, graphicFrame (charts/tables)
+            # and grpSp all occupy slide real estate and participate in the
+            # screen-reader z-order. Shapes without an explicit position
+            # (layout-inherited placeholders) are skipped rather than pinned
+            # to (0,0), which would fabricate inversions.
+            _POSITIONED = ("}sp", "}pic", "}graphicFrame", "}grpSp")
             shapes: list[tuple[int, tuple[int, int]]] = []
             for child_idx, child in enumerate(spTree, start=1):
-                # Skip group properties
-                if not child.tag.endswith("}sp") and not child.tag.endswith("}pic"):
+                if not child.tag.endswith(_POSITIONED):
                     continue
                 pos = _shape_position(child)
+                if pos is None:
+                    continue
                 shapes.append((child_idx, pos))
             if len(shapes) < 3:
                 continue

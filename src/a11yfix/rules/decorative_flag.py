@@ -18,8 +18,30 @@ from a11yfix.rules.base import BaseRule, DocumentHandle, RuleMeta, register_rule
 DECORATIVE_PRESET_GEOMETRIES = {
     "line",
     "straightConnector1",
-    "rect",  # only if no text and very thin / very wide
+    "rect",  # only if no text AND very thin/very wide (see _rect_is_strip)
 }
+
+# A rect only reads as ornamental when it's a strip (divider/border), not a
+# normal rectangle that may be a content frame.
+_RECT_STRIP_ASPECT = 10
+
+
+def _rect_is_strip(spPr: object) -> bool:
+    """True when the shape's extent is degenerate or >= 10:1 aspect ratio."""
+    xfrm = spPr.find(qn("a:xfrm"))  # type: ignore[union-attr]
+    if xfrm is None:
+        return False
+    ext = xfrm.find(qn("a:ext"))
+    if ext is None:
+        return False
+    try:
+        cx = int(ext.get("cx") or 0)
+        cy = int(ext.get("cy") or 0)
+    except ValueError:
+        return False
+    if cx <= 0 or cy <= 0:
+        return True  # zero-extent shape: nothing to read, safe to suggest
+    return cx >= _RECT_STRIP_ASPECT * cy or cy >= _RECT_STRIP_ASPECT * cx
 
 
 class DecorativeFlagRule(BaseRule):
@@ -65,6 +87,8 @@ class DecorativeFlagRule(BaseRule):
                     continue
                 prst = prstGeom.get("prst") or ""
                 if prst not in DECORATIVE_PRESET_GEOMETRIES:
+                    continue
+                if prst == "rect" and not _rect_is_strip(spPr):
                     continue
                 # already decorative?
                 nv = sp.find(qn("p:nvSpPr"))

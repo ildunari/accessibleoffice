@@ -37,6 +37,33 @@ def test_word_shade_darkens():
     assert out.r < base.r and out.g < base.g and out.b < base.b
 
 
+def test_word_tint_spec_example():
+    # ECMA-376 §17.3.2.6 worked example: themeTint="99" (0x99 = 153) applied
+    # to component 0x50 (80) yields 0x96 (150).
+    out = apply_word_tint_shade(RGB(0x50, 0x50, 0x50), tint=0x99, shade=None)
+    assert out == RGB(0x96, 0x96, 0x96)
+
+
+def test_word_shade_spec_example():
+    # ECMA-376 §17.3.2.6 worked example: themeShade="80" (0x80 = 128) applied
+    # to component 0x96 (150) yields 0x4B (75).
+    out = apply_word_tint_shade(RGB(0x96, 0x96, 0x96), tint=None, shade=0x80)
+    assert out == RGB(0x4B, 0x4B, 0x4B)
+
+
+def test_word_tint_shade_255_is_identity():
+    # 0xFF means "full original color" for both attributes.
+    base = RGB(100, 150, 200)
+    assert apply_word_tint_shade(base, tint=255, shade=None) == base
+    assert apply_word_tint_shade(base, tint=None, shade=255) == base
+
+
+def test_word_tint_zero_is_white_shade_zero_is_black():
+    base = RGB(100, 150, 200)
+    assert apply_word_tint_shade(base, tint=0, shade=None) == RGB(255, 255, 255)
+    assert apply_word_tint_shade(base, tint=None, shade=0) == RGB(0, 0, 0)
+
+
 def test_lum_mod_darkens():
     base = RGB(200, 200, 200)
     out = apply_lum_mod_off(base, lum_mod=0.5, lum_off=None)

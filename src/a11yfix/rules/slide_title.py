@@ -5,8 +5,10 @@ WCAG 2.4.10 (Section Headings) / 2.4.6 (Headings and Labels). Severity: Error.
 Detection:
   1. Slide must have a title placeholder (p:sp where nvPr/ph type='title' or 'ctrTitle').
   2. The placeholder's text must be non-empty.
-  3. Per gotcha #10: also flag titles that are off-canvas-but-present, OR
-     "fake titles" (large bold text in non-placeholder text box on a slide with no real title).
+
+Known limitation (gotcha #10): off-canvas-but-present titles and "fake
+titles" (large bold text in a non-placeholder text box) are NOT detected —
+geometry inspection is out of scope for this rule version.
 """
 
 from __future__ import annotations

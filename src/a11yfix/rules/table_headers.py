@@ -97,6 +97,8 @@ class TableHeaderRule(BaseRule):
             if not rows:
                 continue
             first = rows[0]
+            # Intentional tradeoff: <2 columns is treated as a layout table to
+            # avoid false positives; legitimate 1-column data tables are missed.
             if len(rows) < 2 or len(first.findall(qn("w:tc"))) < 2:
                 continue
             if _row_has_tblheader(first):
@@ -130,7 +132,8 @@ class TableHeaderRule(BaseRule):
                     continue
                 tblPr = tbl.find(qn("a:tblPr"))
                 first_row = tblPr.get("firstRow") if tblPr is not None else None
-                if first_row == "1":
+                # firstRow is xsd:boolean — "1" and "true" are both valid ON.
+                if attr_bool_enabled(first_row):
                     continue
                 table_ref = ppt_table_ref(slide_idx=slide_idx, sp_tree=sp_tree, tbl=tbl)
                 if table_ref is None:

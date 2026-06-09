@@ -24,11 +24,17 @@ class CaptionsMediaRule(BaseRule):
         from a11yfix.ooxml.pptx_reader import PptxHandle
 
         assert isinstance(doc, PptxHandle)
+        p14_media = "{http://schemas.microsoft.com/office/powerpoint/2010/main}media"
         for slide_idx, slide_xml in enumerate(doc.slides_xml, start=1):
-            # Look for p:videoFile or p:audioFile under timing or shape relationships
+            # Legacy ECMA-376 embeds: a:videoFile / a:audioFile. Office 2013+
+            # also writes the modern p14:media extension alongside the legacy
+            # element, so suffix matching covers Office files; the explicit
+            # p14:media check catches third-party decks that omit the legacy
+            # element.
             has_media = False
             for el in slide_xml.iter():
-                if el.tag.endswith("}videoFile") or el.tag.endswith("}audioFile"):
+                tag = el.tag
+                if tag.endswith("}videoFile") or tag.endswith("}audioFile") or tag == p14_media:
                     has_media = True
                     break
             if not has_media:

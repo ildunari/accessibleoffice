@@ -14,8 +14,12 @@ from collections.abc import Iterable
 from a11yfix.manifest import FileFormat, Finding, Severity
 from a11yfix.ooxml.docx_paths import iter_paragraph_refs
 from a11yfix.ooxml.namespaces import qn
+from a11yfix.ooxml.toggles import w_on_off_enabled
 from a11yfix.rules.base import BaseRule, DocumentHandle, RuleMeta, register_rule
 
+# Known limitation: matches the built-in English style ids/names only.
+# Localized or custom heading styles (e.g. "Titre 1", "Überschrift 1") are
+# not recognized and fall through to the fake-heading heuristic.
 HEADING_RE = re.compile(r"^Heading\s*([1-9])$")
 
 
@@ -44,7 +48,10 @@ def _looks_like_fake_heading(p: object) -> bool:
     bold_count = 0
     for r in runs:
         rPr = r.find(qn("w:rPr"))
-        if rPr is not None and rPr.find(qn("w:b")) is not None:
+        # w:b is an OnOff toggle: <w:b w:val="0"/> explicitly turns bold OFF
+        # (commonly used to override an inherited bold style) and must not
+        # count as bold.
+        if rPr is not None and w_on_off_enabled(rPr.find(qn("w:b"))):
             bold_count += 1
     return bold_count == len(runs)
 

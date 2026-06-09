@@ -53,11 +53,16 @@ class DocumentLanguageRule(BaseRule):
             from a11yfix.ooxml.pptx_reader import PptxHandle
 
             assert isinstance(doc, PptxHandle)
+            # Scope to the canonical location (p:defaultTextStyle/a:lvlNpPr/
+            # a:defRPr/@lang). Iterating the whole presentation element could
+            # pick up an unrelated defRPr and misreport the default language.
             pres = doc.pptx.element
-            for rpr in pres.iter(qn("a:defRPr")):
-                if rpr.get("lang"):
-                    lang = rpr.get("lang") or ""
-                    break
+            default_style = pres.find(qn("p:defaultTextStyle"))
+            if default_style is not None:
+                for rpr in default_style.iter(qn("a:defRPr")):
+                    if rpr.get("lang"):
+                        lang = rpr.get("lang") or ""
+                        break
 
         if lang.strip():
             return

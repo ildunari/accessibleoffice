@@ -86,19 +86,21 @@ def apply_lum_mod_off(rgb: RGB, *, lum_mod: float | None, lum_off: float | None)
 def apply_word_tint_shade(rgb: RGB, *, tint: int | None, shade: int | None) -> RGB:
     """Word-style: themeTint (lighten toward white) / themeShade (darken toward black).
 
-    tint in [0, 255]: 0 = no change, 255 = full white
-    shade in [0, 255]: 0 = no change, 255 = full black
-    Per ECMA-376: result = base + (255 - base) * (tint/255) for tint
-                  result = base * (1 - shade/255) for shade
+    Per ECMA-376 §17.3.2.6, both attributes are one hex byte where 0xFF (255)
+    means "no change / full original color" and lower values apply MORE of
+    the effect:
+        tint:  C' = C * (tint/255) + 255 * (1 - tint/255)   (blend toward white)
+        shade: C' = C * (shade/255)                          (scale toward black)
+    Spec worked examples: tint 0x99 on 0x50 -> 0x96; shade 0x80 on 0x96 -> 0x4B.
     """
     r, g, b = rgb.r, rgb.g, rgb.b
-    if tint is not None and tint > 0:
+    if tint is not None and tint < 255:
         f = tint / 255.0
-        r = round(r + (255 - r) * f)
-        g = round(g + (255 - g) * f)
-        b = round(b + (255 - b) * f)
-    if shade is not None and shade > 0:
-        f = 1.0 - shade / 255.0
+        r = round(r * f + 255 * (1 - f))
+        g = round(g * f + 255 * (1 - f))
+        b = round(b * f + 255 * (1 - f))
+    if shade is not None and shade < 255:
+        f = shade / 255.0
         r = round(r * f)
         g = round(g * f)
         b = round(b * f)

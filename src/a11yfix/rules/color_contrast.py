@@ -36,14 +36,22 @@ def _local_name(tag: str) -> str:
 def _lum_transforms(color_el: object) -> tuple[float | None, float | None]:
     lum_mod = lum_off = None
     for child in color_el:  # type: ignore[union-attr]
-        if child.tag.endswith("}lumMod"):
-            lum_mod = int(child.get("val") or "100000") / 100000.0
-        elif child.tag.endswith("}lumOff"):
-            lum_off = int(child.get("val") or "0") / 100000.0
+        # val comes from untrusted XML; a malformed value must not abort the
+        # whole detection pass for the document.
+        try:
+            if child.tag.endswith("}lumMod"):
+                lum_mod = int(child.get("val") or "100000") / 100000.0
+            elif child.tag.endswith("}lumOff"):
+                lum_off = int(child.get("val") or "0") / 100000.0
+        except ValueError:
+            continue
     return lum_mod, lum_off
 
 
 def _theme_scheme_from_pptx(path: str | Path) -> dict[str, str]:
+    # Known limitation: multi-master decks have one theme per master
+    # (theme1.xml, theme2.xml, ...); we resolve everything against the first.
+    # Per-slide master association is out of scope for this heuristic rule.
     scheme = dict(DEFAULT_SCHEME)
     try:
         with zipfile.ZipFile(path) as zf:
@@ -200,7 +208,12 @@ class ColorContrastRule(BaseRule):
                 bg = _shape_background(sp, resolver) or slide_bg
                 if bg is None:
                     continue
-                for p_idx, para in enumerate(sp.iter(qn("a:p")), start=1):
+                # Direct children of txBody only: deep iteration could pull
+                # nested a:p elements and desync p_idx from the officecli path.
+                tx_body = sp.find(qn("p:txBody"))
+                if tx_body is None:
+                    continue
+                for p_idx, para in enumerate(tx_body.findall(qn("a:p")), start=1):
                     for r_idx, r in enumerate(para.findall(qn("a:r")), start=1):
                         rPr = r.find(qn("a:rPr"))
                         fg = _run_color(r, sp, resolver)
@@ -209,7 +222,10 @@ class ColorContrastRule(BaseRule):
                         ratio = contrast_ratio(fg, bg)
                         # Determine large-text threshold (>=18pt or >=14pt bold)
                         sz = rPr.get("sz") if rPr is not None else None
-                        sz_pt = int(sz) / 100 if sz else 12.0
+                        try:
+                            sz_pt = int(sz) / 100 if sz else 12.0
+                        except ValueError:
+                            sz_pt = 12.0
                         is_bold = rPr is not None and attr_bool_enabled(rPr.get("b"))
                         is_large = sz_pt >= 18 or (sz_pt >= 14 and is_bold)
                         threshold = 3.0 if is_large else 4.5
