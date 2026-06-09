@@ -25,3 +25,4 @@ desktop/src-tauri/Cargo.lock
 
 # Generated diagram exports
 artifacts/
+desktop/node_modules/
