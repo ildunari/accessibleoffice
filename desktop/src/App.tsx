@@ -88,7 +88,7 @@ interface FolderScan {
 
 interface BatchFile {
   name: string;
-  status: "queued" | "running" | "done" | "failed";
+  status: "queued" | "running" | "done" | "failed" | "partial";
   s2?: number;
   s3?: number;
   residual?: number;
@@ -1063,6 +1063,10 @@ function BatchStatusBadge({ file }: { file: BatchFile }) {
     failed: {
       label: "failed",
       cls: "text-[var(--color-error)] bg-[color-mix(in_oklch,var(--color-error)_15%,transparent)]",
+    },
+    partial: {
+      label: "partial",
+      cls: "text-[var(--color-warning)] bg-[color-mix(in_oklch,var(--color-warning)_15%,transparent)]",
     },
   };
   const m = map[file.status];

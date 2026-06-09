@@ -759,6 +759,12 @@ static RE_BATCH_FILE_OK: Lazy<Regex> = Lazy::new(|| {
 });
 static RE_BATCH_FILE_FAIL: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"^\s+\[fail\]\s+(?P<name>.+?):\s+(?P<err>.+)$").unwrap());
+static RE_BATCH_FILE_PART: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"^\s+\[part\]\s+(?P<name>.+?)\s+s2=(?P<s2>\d+)\s+s3=(?P<s3>\d+)\s+residual=(?P<res>\d+):\s+(?P<err>.+)$",
+    )
+    .unwrap()
+});
 static RE_BATCH_DONE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r"^\[batch\]\s+done\s+files=(?P<files>\d+)\s+done=(?P<done>\d+)\s+failed=(?P<failed>\d+).*cost=\$(?P<cost>[0-9.]+)",
@@ -796,6 +802,20 @@ fn emit_batch_event(app: &AppHandle, line: &str) {
                 "s3": c["s3"].parse::<u32>().unwrap_or(0),
                 "residual": c["res"].parse::<u32>().unwrap_or(0),
                 "elapsed_sec": c["sec"].parse::<f64>().unwrap_or(0.0),
+            }),
+        );
+    } else if let Some(c) = RE_BATCH_FILE_PART.captures(line) {
+        // Stages 1-2 succeeded (counts are real, the file may have been
+        // fixed on disk); a later stage was skipped — see cli.py [part].
+        let _ = app.emit(
+            "accofc-batch-file",
+            serde_json::json!({
+                "name": &c["name"],
+                "status": "partial",
+                "s2": c["s2"].parse::<u32>().unwrap_or(0),
+                "s3": c["s3"].parse::<u32>().unwrap_or(0),
+                "residual": c["res"].parse::<u32>().unwrap_or(0),
+                "error": &c["err"],
             }),
         );
     } else if let Some(c) = RE_BATCH_FILE_FAIL.captures(line) {

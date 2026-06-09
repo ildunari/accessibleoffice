@@ -39,16 +39,18 @@ class DocumentTitleRule(BaseRule):
                 title = t.text.strip()
         if title:
             return
+        # officecli exposes the core title as the `title` property on the
+        # root node ("/"), so that is the path stamped on the finding — it
+        # flows into the manifest audit trail and the desktop app's copyable
+        # `officecli` command. The intuitive
+        # `/document/coreProperties/title` path is rejected by officecli
+        # 1.0.x ("Path not found").
         yield Finding(
             id="doc-title-missing",
             rule_id=self.meta.rule_id,
             severity=self.meta.severity,
             wcag_sc=self.meta.wcag_sc,
-            officecli_path=(
-                "/document/coreProperties/title"
-                if doc.file_format == FileFormat.DOCX
-                else "/presentation/coreProperties/title"
-            ),
+            officecli_path="/",
             current_value="",
             plain_impact=self.meta.plain_impact,
             extra={"filename": Path(doc.path).stem},
@@ -61,14 +63,11 @@ class DocumentTitleRule(BaseRule):
             return None
         if stem.lower() in {"untitled", "document", "presentation", "deck", "doc"}:
             return None
-        # officecli exposes the core title as the `title` property on the root
-        # node: `set / --prop title=...`. The earlier
-        # `/document/coreProperties/title` path with a `value` prop is rejected
-        # by officecli 1.0.x ("Path not found"), so the fix silently no-ops.
+        # `set / --prop title=...` — path comes from detect() (see comment there).
         return [
             OfficecliOp(
                 verb="set",
-                path="/",
+                path=finding.officecli_path,
                 props={"title": stem.replace("_", " ").replace("-", " ").strip()},
             )
         ]

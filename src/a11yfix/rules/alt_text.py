@@ -83,11 +83,20 @@ def _is_catalog_code(text: str) -> bool:
     punctuation common to catalog numbers are stripped, ≤2 alphabetic characters
     remain — a leading series code or a trailing subfigure letter (a/b/c). Real
     descriptions leave many letters behind.
+
+    Terse scientific labels ('CO2', 'p53', 'CD4', 'Ki 67', 'pH 7.4') also leave
+    ≤2 letters, so when any letters survive the strip we additionally require
+    the token to be long and digit-dominated before calling it a catalog code.
     """
     if not any(ch.isdigit() for ch in text):
         return False
     alpha_remainder = re.sub(r"[\d\s_\-./()]", "", text)
-    return len(alpha_remainder) <= 2
+    if len(alpha_remainder) > 2:
+        return False
+    if not alpha_remainder:
+        return True  # pure digits/punctuation: '018', '001 - 14_01'
+    digits = sum(ch.isdigit() for ch in text)
+    return len(text.strip()) >= 6 and digits > len(alpha_remainder)
 
 
 def _is_missing_alt(text: str) -> bool:

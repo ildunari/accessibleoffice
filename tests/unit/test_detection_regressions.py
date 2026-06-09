@@ -181,6 +181,47 @@ def test_typed_bullets_still_detected(tmp_path):
     assert len(findings) == 2
 
 
+def _docx_with_styled_paragraphs(tmp_path, texts_and_styles, name):
+    from docx import Document  # type: ignore[import-untyped]
+
+    path = tmp_path / name
+    docx = Document()
+    for text, style in texts_and_styles:
+        docx.add_paragraph(text, style=style)
+    docx.save(path)
+    return path
+
+
+def test_consecutive_numbered_headings_not_flagged(tmp_path):
+    """Adjacent numbered section headings must not vouch for each other as a
+    fake list — 'promote to a real list' is the wrong fix for headings."""
+    path = _docx_with_styled_paragraphs(
+        tmp_path,
+        [
+            ("1. Introduction", "Heading 1"),
+            ("2. Methods", "Heading 1"),
+            ("3. Results", "Heading 1"),
+        ],
+        "headings.docx",
+    )
+    findings = list(ListSemanticsRule().detect(open_docx(path)))
+    assert findings == []
+
+
+def test_numbered_heading_before_typed_bullets_not_flagged(tmp_path):
+    """A bullet neighbor must not vouch for a numbered paragraph: a numbered
+    heading directly followed by typed bullets is still a heading."""
+    path = _docx_with_paragraphs(
+        tmp_path,
+        ["1. Introduction", "• point one", "• point two"],
+        "mixed.docx",
+    )
+    findings = list(ListSemanticsRule().detect(open_docx(path)))
+    # Only the two typed bullets are fake-list items.
+    assert len(findings) == 2
+    assert all("point" in f.current_value for f in findings)
+
+
 # ---- reading_order: graphicFrame / grpSp positions ---------------------------
 
 

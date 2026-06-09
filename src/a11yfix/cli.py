@@ -368,7 +368,7 @@ def _run_batch(
     """
     from a11yfix.batch import (
         BatchState,
-        read_progress,
+        latest_progress_by_file,
         record_progress,
         set_shard_status,
         shard_pending_files,
@@ -404,14 +404,17 @@ def _run_batch(
     )
 
     def _shard_outcome(shard_id: str) -> str:
-        """A shard with any failed file is 'partial', never 'done'."""
-        failed = sum(
-            1 for e in read_progress(state_dir, shard_id) if e.get("status") == "failed"
+        """A shard with any failed or partial file is 'partial', never 'done'."""
+        unfinished = sum(
+            1
+            for e in latest_progress_by_file(state_dir, shard_id).values()
+            if e.get("status") in ("failed", "partial")
         )
-        return "partial" if failed else "done"
+        return "partial" if unfinished else "done"
 
     grand_done = 0
     grand_failed = 0
+    grand_partial = 0
     for shard in state.shards:
         pending = shard_pending_files(state_dir, shard.id)
         if not pending:
@@ -506,9 +509,33 @@ def _run_batch(
                 Path(result_tmp).unlink(missing_ok=True)
 
             cost_delta = meter.total() - cost_before
+            if result.exit_code == 0 and result.error and result.manifest_path:
+                # Stages 1-2 succeeded and wrote a manifest (and possibly
+                # fixes to disk), but a later stage was skipped — e.g. the AI
+                # adapter is unavailable. That is "partial", not "failed":
+                # the work done so far counts, and a resume retries the file
+                # so stage 3 can run once the adapter is available.
+                record_progress(
+                    state_dir,
+                    shard.id,
+                    file=str(f),
+                    status="partial",
+                    manifest=str(result.manifest_path),
+                    stage_2=result.stage_2_count,
+                    stage_3=result.stage_3_count,
+                    residual=result.residual_count,
+                    error=result.error,
+                    cost_usd=cost_delta,
+                )
+                grand_partial += 1
+                click.echo(
+                    f"  [part] {f.name}  s2={result.stage_2_count} "
+                    f"s3={result.stage_3_count} residual={result.residual_count}: "
+                    f"{result.error}",
+                    err=True,
+                )
+                continue
             if result.error or result.exit_code != 0:
-                # Any error fails the file — including "adapter unavailable",
-                # where a manifest exists but stage 3 was silently skipped.
                 record_progress(
                     state_dir,
                     shard.id,
@@ -551,12 +578,20 @@ def _run_batch(
     click.echo("")
     click.echo(
         f"[batch] done  files={rollup.files_total}  done={rollup.files_done}  "
-        f"failed={rollup.files_failed}  fixes(s2)={rollup.fixes_stage_2}  "
+        f"failed={rollup.files_failed}  partial={rollup.files_partial}  "
+        f"fixes(s2)={rollup.fixes_stage_2}  "
         f"fixes(s3)={rollup.fixes_stage_3}  residual={rollup.residual_total}  "
         f"cost=${rollup.cost_usd:.4f}"
     )
+    if rollup.files_partial:
+        click.echo(
+            f"[batch] {rollup.files_partial} file(s) partial (stage 3 skipped) — "
+            "fix the AI adapter and --resume to finish them",
+            err=True,
+        )
     click.echo(f"[batch] state: {state_dir}")
-    return 0 if rollup.files_failed == 0 else 5
+    # Partial counts as not-success: stage 3 was promised but skipped.
+    return 0 if rollup.files_failed == 0 and rollup.files_partial == 0 else 5
 
 
 def _resolve_batch_id(batch_id: str) -> Path:

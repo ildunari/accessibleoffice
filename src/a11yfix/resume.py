@@ -16,7 +16,7 @@ from a11yfix.batch import (
     DEFAULT_BATCHES_ROOT,
     BatchState,
     aggregate_rollup,
-    read_progress,
+    latest_progress_by_file,
     shard_completed_files,
     shard_pending_files,
 )
@@ -54,10 +54,11 @@ def find_active_batches(root: Path | str | None = None) -> list[BatchInfo]:
         if status == "done":
             continue
         # Aggregate quickly via per-shard progress files (no manifest reads).
+        # Latest entry per file: retried files must not double-count.
         done = 0
         failed = 0
         for s in state.shards:
-            for entry in read_progress(child, s.id):
+            for entry in latest_progress_by_file(child, s.id).values():
                 st = entry.get("status")
                 if st == "done":
                     done += 1
@@ -107,11 +108,11 @@ def write_resume_md(state_dir: Path | str) -> Path:
     sd = Path(state.state_dir)
 
     completed_total = sum(
-        sum(1 for e in read_progress(sd, s.id) if e.get("status") == "done")
+        sum(1 for e in latest_progress_by_file(sd, s.id).values() if e.get("status") == "done")
         for s in state.shards
     )
     failed_total = sum(
-        sum(1 for e in read_progress(sd, s.id) if e.get("status") == "failed")
+        sum(1 for e in latest_progress_by_file(sd, s.id).values() if e.get("status") == "failed")
         for s in state.shards
     )
     files_total = sum(s.files for s in state.shards)
@@ -139,7 +140,7 @@ def write_resume_md(state_dir: Path | str) -> Path:
     lines.append("| Shard | Files | Status | Done | Failed | Pending |")
     lines.append("|---|---|---|---|---|---|")
     for s in state.shards:
-        prog = read_progress(sd, s.id)
+        prog = latest_progress_by_file(sd, s.id).values()
         sd_done = sum(1 for e in prog if e.get("status") == "done")
         sd_failed = sum(1 for e in prog if e.get("status") == "failed")
         sd_pending = max(0, s.files - sd_done - sd_failed)

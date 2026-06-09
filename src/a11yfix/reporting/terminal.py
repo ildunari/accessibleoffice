@@ -8,7 +8,7 @@ from rich.console import Console
 from rich.table import Table
 
 from a11yfix.manifest import Manifest, Severity
-from a11yfix.rules.base import AI_FIXABLE_RULE_IDS, DETERMINISTIC_RULE_IDS
+from a11yfix.rules.base import finding_fixability
 
 SEVERITY_STYLE = {
     Severity.ERROR.value: "bold red",
@@ -71,22 +71,23 @@ def print_report(manifest: Manifest, *, console: Console | None = None) -> None:
     if len(manifest.residual_findings) > 20:
         console.print(f"[dim]... and {len(manifest.residual_findings) - 20} more[/]")
 
-    _print_fixability_footer(manifest, by_rule, console)
+    _print_fixability_footer(manifest, console)
 
 
-def _print_fixability_footer(
-    manifest: Manifest, by_rule: Counter[str], console: Console
-) -> None:
+def _print_fixability_footer(manifest: Manifest, console: Console) -> None:
     """Honest breakdown of what is left to fix and how to fix it.
 
     Prevents the false impression that `auto` mode addressed an image-heavy deck:
     most real findings (alt text, slide titles) need stage 3 (`--mode full`), and
     contrast/reading-order need human judgment. `auto` only resolves the small
-    deterministic set.
+    deterministic set. Classification is per finding (finding_fixability), not
+    per rule id — e.g. off-canvas titles share the slide-title rule id but are
+    a manual repositioning call, not an AI generation target.
     """
-    ai_n = sum(c for r, c in by_rule.items() if r in AI_FIXABLE_RULE_IDS)
-    det_left = sum(c for r, c in by_rule.items() if r in DETERMINISTIC_RULE_IDS)
-    manual_n = len(manifest.residual_findings) - ai_n - det_left
+    fixability = Counter(finding_fixability(f) for f in manifest.residual_findings)
+    ai_n = fixability["ai"]
+    det_left = fixability["deterministic"]
+    manual_n = fixability["manual"]
     ran_ai = bool(manifest.stage_3_fixes_applied)
 
     console.print(
@@ -101,8 +102,13 @@ def _print_fixability_footer(
             "item(s) (alt text, link text, slide titles). "
             "'auto' applies only deterministic fixes.[/]"
         )
+    if any(f.rule_id == "document-language-missing" for f in manifest.residual_findings):
+        console.print(
+            "[dim]↳ The document-language fix is opt-in: re-run with "
+            "[bold]--default-lang[/] (e.g. --default-lang en-US).[/]"
+        )
     if manual_n:
         console.print(
-            "[dim]↳ Manual-review items (contrast, reading order, decorative flags) "
-            "are judgment calls and are never auto-applied.[/]"
+            "[dim]↳ Manual-review items (contrast, reading order, decorative flags, "
+            "off-canvas titles) are judgment calls and are never auto-applied.[/]"
         )

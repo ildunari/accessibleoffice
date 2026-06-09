@@ -187,8 +187,12 @@ def apply_single_shot_fixes(
                     f.extra.get("paragraph_text") or f.extra.get("shape_text") or f.current_value
                 )
                 # Content-based key (no finding id): the same link in another
-                # paragraph or a later re-run still hits the cache.
-                key = f"linktext|{url}|{surrounding[:200]}"
+                # paragraph or a later re-run still hits the cache. Hash the
+                # full surrounding text so the key covers exactly what the
+                # model sees — a truncated key would collide for contexts
+                # that only diverge later.
+                surrounding_h = hashlib.sha256(surrounding.encode("utf-8")).hexdigest()
+                key = f"linktext|{url}|{surrounding_h}"
                 cached = _cache_get(key)
                 if cached:
                     text, conf, model = cached["text"], cached["confidence"], cached["model"]
@@ -222,7 +226,12 @@ def apply_single_shot_fixes(
                 slide_idx = int(f.extra.get("slide_index", 0))
                 text_ctx, layout = _slide_text(doc, slide_idx)
                 # Content-based key (no finding id) so re-runs hit the cache.
-                key = f"slidetitle|{layout}|{text_ctx[:200]}"
+                # Hash the full slide text: the model gets all of it, so a
+                # truncated key would hand one slide's cached title to a
+                # different slide that merely shares the same opening text
+                # (the cache is persistent, so collisions cross runs/decks).
+                text_h = hashlib.sha256(text_ctx.encode("utf-8")).hexdigest()
+                key = f"slidetitle|{layout}|{text_h}"
                 cached = _cache_get(key)
                 if cached:
                     text, conf, model = cached["text"], cached["confidence"], cached["model"]
@@ -318,6 +327,12 @@ def apply_single_shot_fixes(
                     )
                 else:
                     _defer(finding, deferred, "stage-3 deferred: officecli did not apply operation")
+            # If nothing actually applied, the officecli open/save round-trip
+            # still rewrote and version-stamped the package. Restore the
+            # post-stage-2 backup so a no-op stage 3 leaves the file's bytes
+            # untouched (mirrors the stage-2 guard in deterministic.py).
+            if not applied:
+                client.restore_from_backup()
             return SingleShotResult(applied=applied, deferred=deferred)
     except FileNotFoundError:
         for finding, _op, _text, _conf in pending_ops:

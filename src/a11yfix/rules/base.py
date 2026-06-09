@@ -115,6 +115,24 @@ DETERMINISTIC_RULE_IDS: frozenset[str] = frozenset(
     }
 )
 
+
+def finding_fixability(finding: Finding) -> str:
+    """'ai' | 'deterministic' | 'manual' — what can actually fix this finding.
+
+    The rule-id sets give the default, but fixability is ultimately per
+    finding: an off-canvas slide title already has text, so its fixer
+    declines to generate one (repositioning is a human/stage-4 call).
+    Reporters must classify through this function, not the raw sets, or
+    they over-promise what `--mode full` can do.
+    """
+    if finding.extra.get("off_canvas"):
+        return "manual"
+    if finding.rule_id in AI_FIXABLE_RULE_IDS:
+        return "ai"
+    if finding.rule_id in DETERMINISTIC_RULE_IDS:
+        return "deterministic"
+    return "manual"
+
 T = TypeVar("T", bound=Rule)
 
 

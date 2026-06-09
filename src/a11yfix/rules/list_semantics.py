@@ -21,8 +21,19 @@ BULLET_RE = re.compile(r"^\s*[•·▪►–\-*●]\s+")
 NUMBERED_RE = re.compile(r"^\s*\(?(\d{1,3}|[a-z]|[ivxlc]{1,5})[.)]\s+", re.IGNORECASE)
 
 
-def _looks_like_manual_list_item(text: str) -> bool:
-    return bool(BULLET_RE.match(text) or NUMBERED_RE.match(text))
+# Built-in Word heading/title styleIds: numbered paragraphs carrying these are
+# section headings, never fake list items.
+_HEADING_STYLE_RE = re.compile(r"^(Heading\d|Title|Subtitle)$", re.IGNORECASE)
+
+
+def _is_heading_styled(p: object) -> bool:
+    pPr = p.find(qn("w:pPr"))  # type: ignore[union-attr]
+    if pPr is None:
+        return False
+    pStyle = pPr.find(qn("w:pStyle"))
+    if pStyle is None:
+        return False
+    return bool(_HEADING_STYLE_RE.match(pStyle.get(qn("w:val")) or ""))
 
 
 class ListSemanticsRule(BaseRule):
@@ -48,13 +59,25 @@ class ListSemanticsRule(BaseRule):
             is_numbered = bool(NUMBERED_RE.match(text))
             if not is_bullet and not is_numbered:
                 continue
+            if _is_heading_styled(p):
+                # "1. Introduction" styled Heading1 is a section heading;
+                # promoting it to a list would be the wrong fix.
+                continue
             if is_numbered and not is_bullet:
                 # A lone numbered paragraph ("1. Introduction") is usually a
-                # heading, not a fake list — require an adjacent list-looking
-                # paragraph before flagging.
-                prev_match = i > 0 and _looks_like_manual_list_item(paras[i - 1][2])
-                next_match = i + 1 < len(paras) and _looks_like_manual_list_item(
-                    paras[i + 1][2]
+                # heading, not a fake list — require an adjacent NUMBERED
+                # paragraph before flagging. A bullet neighbor doesn't vouch:
+                # a numbered heading followed by typed bullets is still a
+                # heading, while real manual numbering comes in numbered runs.
+                prev_match = (
+                    i > 0
+                    and bool(NUMBERED_RE.match(paras[i - 1][2]))
+                    and not _is_heading_styled(paras[i - 1][1])
+                )
+                next_match = (
+                    i + 1 < len(paras)
+                    and bool(NUMBERED_RE.match(paras[i + 1][2]))
+                    and not _is_heading_styled(paras[i + 1][1])
                 )
                 if not (prev_match or next_match):
                     continue

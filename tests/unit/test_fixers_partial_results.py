@@ -344,3 +344,91 @@ def test_single_shot_docx_alt_text_emits_officecli_alt_op(tmp_path, monkeypatch)
     assert captured[0].verb == "set"
     assert captured[0].path == finding.officecli_path
     assert captured[0].props == {"alt": "Green square image"}
+
+
+def test_single_shot_restores_backup_when_no_fix_applied(tmp_path, monkeypatch):
+    """Stage 3 mirrors stage 2's no-op guard: if officecli applied none of the
+    ops, the open/save round-trip still rewrote the package, so the post-
+    stage-2 backup must be restored to keep the bytes untouched."""
+    doc = FakeDoc(tmp_path / "deck.pptx")
+    findings = [_finding(1), _finding(2)]
+    clients: list[NoopRestoreClient] = []
+
+    def make_client(path, **kwargs):
+        c = NoopRestoreClient(path, **kwargs)
+        clients.append(c)
+        return c
+
+    monkeypatch.setattr(single_shot, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setitem(single_shot.REGISTRY, "fake-rule", FakeRule())
+    monkeypatch.setattr(single_shot, "OfficecliClient", make_client)
+
+    result = single_shot.apply_single_shot_fixes(findings, doc, FakeAdapter())
+
+    assert result.applied == []
+    assert {f.id for f in result.deferred} == {"f1", "f2"}
+    assert clients and clients[0].restored, "no-op stage 3 must restore the backup"
+
+
+def test_slide_title_cache_key_covers_full_slide_text(tmp_path, monkeypatch):
+    """Two slides sharing a layout and the same first 200 chars of text must
+    NOT share a cached title — the key must cover the full text the model sees
+    (the cache is persistent, so a truncated key leaks titles across slides
+    and even across decks)."""
+    doc = FakeDoc(tmp_path / "deck.pptx")
+    boilerplate = "shared boilerplate opening " * 10  # > 200 chars
+    slide_texts = {1: boilerplate + "ends about mitosis", 2: boilerplate + "ends about meiosis"}
+
+    monkeypatch.setattr(single_shot, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(
+        single_shot, "_slide_text", lambda doc, idx: (slide_texts[idx], "Title Layout")
+    )
+
+    calls: list[str] = []
+
+    class TitleAdapter:
+        name = "fake-title"
+
+        def suggest_slide_title(self, slide_text, layout):
+            calls.append(slide_text)
+
+            class Result:
+                text = f"Generated title {len(calls)}"
+                confidence = 0.9
+                model = "fake-title"
+
+            return Result()
+
+    class TitleRule(FakeRule):
+        def fix_single_shot(self, finding, doc):
+            return SingleShotFix(kind="slide-title", finding=finding)
+
+    class OkClient:
+        backup_path = None
+
+        def __init__(self, path, **kwargs):
+            self.path = path
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def batch(self, ops):
+            return BatchResult(success=True, per_op=[{"ok": True} for _ in ops])
+
+        def validate(self):
+            return ValidationResult(status="ok")
+
+    monkeypatch.setitem(single_shot.REGISTRY, "fake-rule", TitleRule())
+    monkeypatch.setattr(single_shot, "OfficecliClient", OkClient)
+
+    f1, f2 = _finding(1), _finding(2)
+    f1.extra["slide_index"] = 1
+    f2.extra["slide_index"] = 2
+
+    result = single_shot.apply_single_shot_fixes([f1, f2], doc, TitleAdapter())
+
+    assert len(calls) == 2, "second slide must not reuse the first slide's cached title"
+    assert {fx.after for fx in result.applied} == {"Generated title 1", "Generated title 2"}

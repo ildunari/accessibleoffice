@@ -61,6 +61,18 @@ GOOD_VALUES = [
     "Cross-section of rat ileum stained with hematoxylin and eosin",
     "Insulin-loaded nanoparticles adhering to the mucosal surface",
     "Photo of beads in gel capsules arranged in a row",
+    # Terse scientific labels: digits with ≤2 letters, but deliberate alt text.
+    # The catalog-number heuristic must not eat these (they'd be sent to AI
+    # regeneration, destroying the author's text).
+    "CO2",
+    "p53",
+    "CD4",
+    "Ki 67",
+    "pH 7.4",
+    "B12",
+    "H2O",
+    "IL-6",
+    "3D",
 ]
 
 

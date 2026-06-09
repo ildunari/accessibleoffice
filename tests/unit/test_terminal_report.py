@@ -62,3 +62,52 @@ def test_clean_file_has_no_fixability_footer():
     )
     out = _render(manifest)
     assert "--mode full" not in out
+
+
+def test_offcanvas_title_counted_manual_not_ai_fixable():
+    """An off-canvas title shares the slide-title rule id but its fixer
+    declines (the slide HAS a title; repositioning is a human call). The
+    footer must not promise --mode full will fix it."""
+    offcanvas = _finding("slide-title-missing", Severity.ERROR, 1)
+    offcanvas.extra["off_canvas"] = True
+    manifest = Manifest(
+        file_path="/tmp/deck.pptx",
+        file_format=FileFormat.PPTX,
+        stage_1_findings_total=1,
+        residual_findings=[offcanvas],
+        validation=ValidationResult(status="skipped"),
+    )
+
+    out = _render(manifest)
+    assert "--mode full" not in out, "footer promised an AI fix the fixer refuses"
+    assert "0" in out and "manual" in out.lower()
+
+
+def test_document_language_footer_points_to_default_lang():
+    """A residual document-language finding is only deterministic with
+    --default-lang; the footer must say how to actually fix it."""
+    manifest = Manifest(
+        file_path="/tmp/doc.docx",
+        file_format=FileFormat.DOCX,
+        stage_1_findings_total=1,
+        residual_findings=[_finding("document-language-missing", Severity.WARNING, 1)],
+        validation=ValidationResult(status="skipped"),
+    )
+
+    out = _render(manifest)
+    assert "--default-lang" in out
+
+
+def test_finding_fixability_classification():
+    from a11yfix.rules.base import finding_fixability
+
+    ai = _finding("alt-text-missing", Severity.ERROR, 1)
+    det = _finding("document-title-missing", Severity.TIP, 2)
+    manual = _finding("color-contrast", Severity.INTELLIGENT, 3)
+    offcanvas = _finding("slide-title-missing", Severity.ERROR, 4)
+    offcanvas.extra["off_canvas"] = True
+
+    assert finding_fixability(ai) == "ai"
+    assert finding_fixability(det) == "deterministic"
+    assert finding_fixability(manual) == "manual"
+    assert finding_fixability(offcanvas) == "manual"

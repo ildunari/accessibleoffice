@@ -251,42 +251,36 @@ def _run_async(coro_fn) -> Any:
             return pool.submit(lambda: asyncio.run(coro_fn())).result()
 
 
+# ensure_vision_compatible only ever returns these media types.
 _SUFFIX_BY_MEDIA = {
     "image/png": ".png",
     "image/jpeg": ".jpg",
     "image/gif": ".gif",
     "image/webp": ".webp",
-    "image/bmp": ".bmp",
-    "image/tiff": ".tiff",
 }
 
 
 def _prepare_image_for_read(image_bytes: bytes) -> tuple[bytes, str]:
     """Bound image payloads before asking Claude Code's Read tool to ingest them.
 
-    Raises ValueError for formats the Read tool can't render (EMF/WMF/SVG/
-    unknown) so the caller defers the finding instead of getting a junk
-    description back.
+    Format gating (sniffing, BMP/TIFF→PNG conversion, EMF/WMF/SVG/unknown
+    rejection) is owned by ensure_vision_compatible — one policy for both the
+    API and SDK adapters. Its ValueError propagates so the caller defers the
+    finding instead of getting a junk description back. This helper only adds
+    the Read-tool size bound: oversized payloads are downscaled/recompressed.
     """
-    from a11yfix.ooxml.image_extract import sniff_image
+    from a11yfix.ooxml.image_extract import ensure_vision_compatible
 
-    media = sniff_image(image_bytes)
-    suffix = _SUFFIX_BY_MEDIA.get(media or "")
-    if suffix is None:
-        raise ValueError(
-            f"unsupported image format for Read-tool vision: {media or 'unidentified bytes'}"
-        )
-    needs_convert = media in ("image/bmp", "image/tiff")
-    if len(image_bytes) <= MAX_READ_IMAGE_BYTES and not needs_convert:
-        return image_bytes, suffix
+    data, media = ensure_vision_compatible(image_bytes)
+    suffix = _SUFFIX_BY_MEDIA[media]
+    if len(data) <= MAX_READ_IMAGE_BYTES:
+        return data, suffix
     try:
         from PIL import Image, ImageOps  # type: ignore[import-untyped]
     except ImportError:
-        if needs_convert:
-            raise ValueError(f"{media} requires Pillow to convert for vision") from None
-        return image_bytes, suffix
+        return data, suffix
     try:
-        with Image.open(io.BytesIO(image_bytes)) as im:
+        with Image.open(io.BytesIO(data)) as im:
             im = ImageOps.exif_transpose(im)
             im.thumbnail((MAX_READ_IMAGE_DIMENSION, MAX_READ_IMAGE_DIMENSION))
             if im.mode not in ("RGB", "L"):
@@ -301,12 +295,12 @@ def _prepare_image_for_read(image_bytes: bytes) -> tuple[bytes, str]:
             for quality in (85, 75, 65, 55):
                 out = io.BytesIO()
                 im.save(out, format="JPEG", quality=quality, optimize=True)
-                data = out.getvalue()
-                if len(data) <= MAX_READ_IMAGE_BYTES or quality == 55:
-                    return data, ".jpg"
+                jpeg = out.getvalue()
+                if len(jpeg) <= MAX_READ_IMAGE_BYTES or quality == 55:
+                    return jpeg, ".jpg"
     except Exception:
-        return image_bytes, suffix
-    return image_bytes, suffix
+        return data, suffix
+    return data, suffix
 
 
 def _looks_like_sdk_payload_error(exc: Exception) -> bool:

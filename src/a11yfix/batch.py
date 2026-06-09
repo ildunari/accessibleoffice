@@ -385,15 +385,29 @@ def read_progress(state_dir: Path | str, shard_id: str) -> list[dict[str, Any]]:
     return out
 
 
+def latest_progress_by_file(state_dir: Path | str, shard_id: str) -> dict[str, dict[str, Any]]:
+    """Last progress entry per file. progress.jsonl is append-only, so a
+    retried file has several entries; the newest one is its current state."""
+    out: dict[str, dict[str, Any]] = {}
+    for e in read_progress(state_dir, shard_id):
+        f = e.get("file")
+        if f:
+            out[f] = e
+    return out
+
+
 def shard_completed_files(state_dir: Path | str, shard_id: str) -> set[str]:
     """Set of absolute file paths already processed in this shard.
 
     Used by workers to skip already-done files after compaction or restart.
+    "partial" (stages 1-2 succeeded, stage 3 skipped — e.g. AI adapter
+    unavailable) is deliberately NOT completed: a resume retries those files
+    so stage 3 can run once the adapter is available.
     """
     return {
-        e.get("file", "")
-        for e in read_progress(state_dir, shard_id)
-        if e.get("file") and e.get("status") in ("done", "failed", "skipped")
+        f
+        for f, e in latest_progress_by_file(state_dir, shard_id).items()
+        if e.get("status") in ("done", "failed", "skipped")
     }
 
 
@@ -426,9 +440,9 @@ def set_shard_status(state_dir: Path | str, shard_id: str, status: str) -> None:
         return
     s.status = status
     s.last_updated = _now()
-    progress = read_progress(state_dir, shard_id)
-    s.completed = sum(1 for e in progress if e.get("status") == "done")
-    s.failed = sum(1 for e in progress if e.get("status") == "failed")
+    latest = latest_progress_by_file(state_dir, shard_id).values()
+    s.completed = sum(1 for e in latest if e.get("status") == "done")
+    s.failed = sum(1 for e in latest if e.get("status") == "failed")
     state.recompute_totals()
     state.save()
 
@@ -445,6 +459,7 @@ class RollupResult:
     files_total: int = 0
     files_done: int = 0
     files_failed: int = 0
+    files_partial: int = 0  # stages 1-2 done, stage 3 skipped (retried on resume)
     findings_total: int = 0
     fixes_stage_2: int = 0
     fixes_stage_3: int = 0
@@ -465,11 +480,19 @@ def aggregate_rollup(state_dir: Path | str) -> RollupResult:
     result = RollupResult(batch_id=state.batch_id, state_dir=str(state_dir))
 
     for shard in state.shards:
-        for entry in read_progress(state_dir, shard.id):
+        # Newest entry per file: a retried file must not be counted (or its
+        # manifest aggregated) once per attempt. Cost, however, was spent on
+        # every attempt, so it is summed over all entries below.
+        all_entries = read_progress(state_dir, shard.id)
+        latest_files = {e["file"]: e for e in all_entries if e.get("file")}
+        result.cost_usd += sum(float(e.get("cost_usd") or 0.0) for e in all_entries)
+        for entry in latest_files.values():
             result.files_total += 1
             status = entry.get("status")
             if status == "done":
                 result.files_done += 1
+            elif status == "partial":
+                result.files_partial += 1
             elif status == "failed":
                 result.files_failed += 1
                 result.errors.append(
@@ -479,7 +502,6 @@ def aggregate_rollup(state_dir: Path | str) -> RollupResult:
                         "error": entry.get("error"),
                     }
                 )
-            result.cost_usd += float(entry.get("cost_usd") or 0.0)
 
             manifest_path = entry.get("manifest")
             if not manifest_path or not Path(manifest_path).exists():
