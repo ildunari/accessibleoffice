@@ -8,9 +8,9 @@ let a worker recover its place after compaction.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 from a11yfix.batch import (
     DEFAULT_BATCHES_ROOT,
@@ -165,14 +165,14 @@ def write_resume_md(state_dir: Path | str) -> Path:
     lines.append("## How to resume")
     lines.append("")
     lines.append(
-        f"Re-invoke the `using-a11yfix` skill. It will detect this batch via "
-        f"`a11yfix-status` and continue from where it left off. To resume "
-        f"directly from the CLI:"
+        "Re-invoke the `using-a11yfix` skill. It will detect this batch via "
+        "`a11yfix-status` and continue from where it left off. To resume "
+        "directly from the CLI:"
     )
     lines.append("")
-    lines.append(f"```bash")
+    lines.append("```bash")
     lines.append(f"a11yfix --resume {state.batch_id}")
-    lines.append(f"```")
+    lines.append("```")
     lines.append("")
     lines.append("Per-shard progress: `<state-dir>/shards/<shard-id>/progress.jsonl`")
 
@@ -252,11 +252,11 @@ def detail_table(state_dir: Path | str) -> str:
 
 __all__ = [
     "BatchInfo",
+    "detail_table",
     "find_active_batches",
     "next_unfinished_files",
     "shard_completed_files",
-    "write_resume_md",
-    "write_all_resume_briefs",
     "status_table",
-    "detail_table",
+    "write_all_resume_briefs",
+    "write_resume_md",
 ]

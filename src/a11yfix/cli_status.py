@@ -86,25 +86,24 @@ def main(
 
     actives = find_active_batches(base)
     click.echo(status_table(actives))
-    if not actives:
-        # Also show recent done ones briefly so users can find their last run.
-        if base.exists():
-            recent = sorted(base.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)[:5]
-            done_ids = []
-            for child in recent:
-                if not child.is_dir():
-                    continue
-                if not (child / "state.json").exists():
-                    continue
-                try:
-                    state = BatchState.load(child)
-                except Exception:
-                    continue
-                if state.status() == "done":
-                    done_ids.append(state.batch_id)
-            if done_ids:
-                click.echo("")
-                click.echo(f"Recent completed: {', '.join(done_ids)}")
+    # Also show recent done ones briefly so users can find their last run.
+    if not actives and base.exists():
+        recent = sorted(base.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)[:5]
+        done_ids = []
+        for child in recent:
+            if not child.is_dir():
+                continue
+            if not (child / "state.json").exists():
+                continue
+            try:
+                state = BatchState.load(child)
+            except Exception:
+                continue
+            if state.status() == "done":
+                done_ids.append(state.batch_id)
+        if done_ids:
+            click.echo("")
+            click.echo(f"Recent completed: {', '.join(done_ids)}")
 
 
 def _gc(root: Path, days: int) -> int:
