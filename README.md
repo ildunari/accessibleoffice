@@ -14,7 +14,7 @@ Download the installer for your platform from the [latest release](https://githu
 2. Copies its bundled OfficeCLI binary to `~/.accessibleoffice/bin/`
 3. Creates a private Python runtime at `~/.accessibleoffice-runtime/` and installs the scanner
 
-No terminal required. No admin password required. Drag a Word or PowerPoint file onto the app and it scans + auto-fixes.
+No terminal required. No admin password required. Drag a Word or PowerPoint file onto the app: it scans, applies the deterministic fixes automatically, and reports what remains (alt text and slide titles need `full` mode; contrast and reading order are flagged for human review). See [Usage](#usage) for what each mode changes.
 
 ### CLI install
 
@@ -60,6 +60,8 @@ accessibleoffice deck.pptx --mode full --dry-run   # show what 'full' would do w
 ```
 
 **Default mode is `auto`** — safe, fast, no network.
+
+What `auto` actually fixes: only the **deterministic** issues — document title, table header rows, and (with `--default-lang`) the document language. The bulk of real-world findings on content-heavy decks — alt text, slide titles, link text — need a model and are applied by `--mode full` (stage 3); contrast and reading-order are human-judgment calls that are never auto-applied. The report ends with a `What's left:` breakdown (AI-fixable / deterministic / manual) so you know whether `auto` actually changed anything or you need `full`. If `auto` finds nothing deterministic to do, it leaves the file byte-for-byte unchanged.
 
 Granular flags still work for advanced users (`--report-only`, `--auto-only`, `--remediate`, `--rules ...`, `--skip-rules ...`, `--strict`, `--output ...`). Run `accessibleoffice --help` for the full list.
 

@@ -93,6 +93,28 @@ class Rule(Protocol):
 
 REGISTRY: dict[str, Rule] = {}
 
+# Single source of truth for which findings can be fixed automatically, used by
+# the reporter to tell the user honestly what `auto` vs `full` can resolve.
+# Keep in sync with the rules that return a SingleShotFix / OfficecliOp.
+#   AI single-shot (stage 3, needs --mode full): rules returning SingleShotFix
+#   Deterministic (stage 2, runs in --mode auto): rules returning OfficecliOp
+# Everything else is human-judgment (decorative tips, reading-order, contrast).
+AI_FIXABLE_RULE_IDS: frozenset[str] = frozenset(
+    {
+        "alt-text-missing",
+        "alt-text-generic",
+        "link-text-generic",
+        "slide-title-missing",
+    }
+)
+DETERMINISTIC_RULE_IDS: frozenset[str] = frozenset(
+    {
+        "document-title-missing",
+        "table-header-missing",
+        "document-language-missing",  # only with --default-lang
+    }
+)
+
 T = TypeVar("T", bound=Rule)
 
 

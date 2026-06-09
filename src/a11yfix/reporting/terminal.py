@@ -8,6 +8,7 @@ from rich.console import Console
 from rich.table import Table
 
 from a11yfix.manifest import Manifest, Severity
+from a11yfix.rules.base import AI_FIXABLE_RULE_IDS, DETERMINISTIC_RULE_IDS
 
 SEVERITY_STYLE = {
     Severity.ERROR.value: "bold red",
@@ -69,3 +70,39 @@ def print_report(manifest: Manifest, *, console: Console | None = None) -> None:
     console.print(detail)
     if len(manifest.residual_findings) > 20:
         console.print(f"[dim]... and {len(manifest.residual_findings) - 20} more[/]")
+
+    _print_fixability_footer(manifest, by_rule, console)
+
+
+def _print_fixability_footer(
+    manifest: Manifest, by_rule: Counter[str], console: Console
+) -> None:
+    """Honest breakdown of what is left to fix and how to fix it.
+
+    Prevents the false impression that `auto` mode addressed an image-heavy deck:
+    most real findings (alt text, slide titles) need stage 3 (`--mode full`), and
+    contrast/reading-order need human judgment. `auto` only resolves the small
+    deterministic set.
+    """
+    ai_n = sum(c for r, c in by_rule.items() if r in AI_FIXABLE_RULE_IDS)
+    det_left = sum(c for r, c in by_rule.items() if r in DETERMINISTIC_RULE_IDS)
+    manual_n = len(manifest.residual_findings) - ai_n - det_left
+    ran_ai = bool(manifest.stage_3_fixes_applied)
+
+    console.print(
+        "\n[bold]What's left:[/] "
+        f"[blue]{ai_n}[/] AI-fixable, "
+        f"[green]{det_left}[/] deterministic, "
+        f"[dim]{manual_n}[/] need manual review"
+    )
+    if ai_n and not ran_ai:
+        console.print(
+            f"[dim]↳ Run [bold]--mode full[/] to auto-generate the {ai_n} AI-fixable "
+            "item(s) (alt text, link text, slide titles). "
+            "'auto' applies only deterministic fixes.[/]"
+        )
+    if manual_n:
+        console.print(
+            "[dim]↳ Manual-review items (contrast, reading order, decorative flags) "
+            "are judgment calls and are never auto-applied.[/]"
+        )

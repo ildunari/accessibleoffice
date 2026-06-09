@@ -10,6 +10,17 @@ Detection scope (v1):
 This is intentionally conservative — real Microsoft Checker uses pixel analysis
 plus full theme/layout/master inheritance we don't fully replicate. Unknown
 foreground/background colors are skipped instead of guessed.
+
+Known coverage limitations (skipped, NOT false-flagged — see the report footer,
+which buckets contrast under manual-review judgment calls):
+  - Text whose color/background is inherited from the slide layout or master
+    placeholder chain is not resolved, so those runs are skipped. Most decks
+    where every run uses theme-inherited color therefore yield few findings;
+    a low finding count does not mean "no contrast problems".
+  - Multi-master decks: scheme colors resolve against theme1.xml only; per-slide
+    master→theme association is not yet implemented.
+Both are deferred deliberately: guessing inherited colors would produce wrong
+ratios and false positives in a rule that is never auto-fixed.
 """
 
 from __future__ import annotations

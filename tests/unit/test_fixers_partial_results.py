@@ -126,6 +126,52 @@ def test_deterministic_short_officecli_results_defer_missing_ops(tmp_path, monke
     assert [f.id for f in result.deferred] == ["f2"]
 
 
+class NoopRestoreClient:
+    """Validation passes but every op fails — the open/save round-trip still
+    mutated the file, so the fixer must restore the pristine backup."""
+
+    backup_path = "/tmp/whatever.bak"
+
+    def __init__(self, path, **kwargs):
+        self.path = path
+        self.restored = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return None
+
+    def batch(self, ops):
+        return BatchResult(success=False, per_op=[{"ok": False} for _ in ops])
+
+    def validate(self):
+        return ValidationResult(status="ok")
+
+    def restore_from_backup(self):
+        self.restored = True
+
+
+def test_deterministic_restores_backup_when_no_fix_applied(tmp_path, monkeypatch):
+    doc = FakeDoc(tmp_path / "deck.pptx")
+    findings = [_finding(1), _finding(2)]
+    clients: list[NoopRestoreClient] = []
+
+    def make_client(path, **kwargs):
+        c = NoopRestoreClient(path, **kwargs)
+        clients.append(c)
+        return c
+
+    monkeypatch.setitem(deterministic.REGISTRY, "fake-rule", FakeRule())
+    monkeypatch.setattr(deterministic, "OfficecliClient", make_client)
+
+    result = deterministic.apply_deterministic_fixes(findings, doc)
+
+    assert result.applied == []
+    assert [f.id for f in result.deferred] == ["f1", "f2"]
+    assert clients and clients[0].restored, "no-op run must restore the backup byte-for-byte"
+
+
 def test_single_shot_short_officecli_results_defer_missing_ops(tmp_path, monkeypatch):
     doc = FakeDoc(tmp_path / "deck.pptx")
     findings = [_finding(1), _finding(2)]

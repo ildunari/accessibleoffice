@@ -120,6 +120,13 @@ def apply_deterministic_fixes(
                 else:
                     deferred.append(finding)
 
+            # If nothing actually applied, the officecli open/save round-trip
+            # still rewrote and version-stamped the package. Restore the
+            # pristine backup so a no-op run leaves the output byte-identical
+            # to the input instead of shipping a mutated file with no benefit.
+            if not applied:
+                client.restore_from_backup()
+
             return DeterministicResult(
                 applied=applied,
                 deferred=deferred,

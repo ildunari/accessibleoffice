@@ -49,8 +49,20 @@ def _is_decorative(cnvpr: object) -> bool:
 
 
 _IMAGE_EXTS = r"png|jpe?g|gif|svg|bmp|tiff?|webp|emf|wmf"
-_FILENAME_RE = re.compile(rf"^[A-Za-z0-9 _.\-]+\.(?:{_IMAGE_EXTS})$", re.IGNORECASE)
+# A filename is a single path segment (no separators) ending in an image
+# extension. The stem is matched Unicode-aware (`[^\\/]`, not an ASCII class)
+# so non-ASCII names like "βgalExpressionInRatTissue.png" are still recognised.
+_FILENAME_RE = re.compile(rf"^[^\\/]+\.(?:{_IMAGE_EXTS})$", re.IGNORECASE)
 _PATH_RE = re.compile(rf"(^[A-Za-z]:[\\/]|[\\/].+\.(?:{_IMAGE_EXTS})$)", re.IGNORECASE)
+# PDF text-extraction auto-name, e.g. "page1image23120112".
+_PDF_AUTONAME_RE = re.compile(r"^page\d+image\d+$", re.IGNORECASE)
+# A whitespace-free token built from underscore-joined segments with a digit
+# somewhere — an instrument/scanner export filename, e.g.
+# "PS_091006_Rat_1_200nm_PJ_5min_16bit_005".
+_UNDERSCORE_FILENAME_RE = re.compile(r"^\S*_\S*_\S*$")
+# A label padded with whitespace then a trailing alphanumeric ID code, e.g.
+# "zein1                 000022D".
+_TRAILING_CODE_RE = re.compile(r"\s{2,}[0-9A-Za-z]*\d[0-9A-Za-z]*\s*$")
 _MISSING_AUTO_NAMES = {"picture", "image", "shape", "object"}
 _QUALITY_AUTO_NAMES = {"chart", "diagram", "smartart", "timeline", "graphic"}
 _AUTO_GENERATED_PHRASES = (
@@ -62,6 +74,20 @@ _AUTO_GENERATED_PHRASES = (
 
 def _normalized_auto_name(text: str) -> str:
     return re.sub(r"\s+\d+$", "", text.strip().lower())
+
+
+def _is_catalog_code(text: str) -> bool:
+    """True for scan/catalog identifiers like '001 - 14_01', '018', 'F06-09'.
+
+    Heuristic: there is at least one digit, and once digits, whitespace and the
+    punctuation common to catalog numbers are stripped, ≤2 alphabetic characters
+    remain — a leading series code or a trailing subfigure letter (a/b/c). Real
+    descriptions leave many letters behind.
+    """
+    if not any(ch.isdigit() for ch in text):
+        return False
+    alpha_remainder = re.sub(r"[\d\s_\-./()]", "", text)
+    return len(alpha_remainder) <= 2
 
 
 def _is_missing_alt(text: str) -> bool:
@@ -86,6 +112,14 @@ def _alt_quality_reason(text: str) -> str | None:
         return "local_file_path"
     if _FILENAME_RE.match(t):
         return "filename"
+    if _PDF_AUTONAME_RE.match(t):
+        return "pdf_extraction_name"
+    if _UNDERSCORE_FILENAME_RE.match(t):
+        return "filename"
+    if _TRAILING_CODE_RE.search(t):
+        return "scanner_id_code"
+    if _is_catalog_code(t):
+        return "catalog_number"
     if _normalized_auto_name(t) in _QUALITY_AUTO_NAMES:
         return "generic_object_label"
     return None

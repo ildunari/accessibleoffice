@@ -61,11 +61,15 @@ class DocumentTitleRule(BaseRule):
             return None
         if stem.lower() in {"untitled", "document", "presentation", "deck", "doc"}:
             return None
+        # officecli exposes the core title as the `title` property on the root
+        # node: `set / --prop title=...`. The earlier
+        # `/document/coreProperties/title` path with a `value` prop is rejected
+        # by officecli 1.0.x ("Path not found"), so the fix silently no-ops.
         return [
             OfficecliOp(
                 verb="set",
-                path=finding.officecli_path,
-                props={"value": stem.replace("_", " ").replace("-", " ").strip()},
+                path="/",
+                props={"title": stem.replace("_", " ").replace("-", " ").strip()},
             )
         ]
 
