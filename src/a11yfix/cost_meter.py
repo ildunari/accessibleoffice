@@ -113,8 +113,11 @@ class CostMeter:
     def _write(self, ledger: CostLedger) -> None:
         if self.path is None:
             return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(ledger.to_json(), indent=2))
+        from a11yfix._io import atomic_write
+
+        # Atomic so a process killed mid-write (even while holding the flock)
+        # can't truncate the ledger and silently reset the running total.
+        atomic_write(self.path, json.dumps(ledger.to_json(), indent=2))
 
     @contextlib.contextmanager
     def _locked(self):

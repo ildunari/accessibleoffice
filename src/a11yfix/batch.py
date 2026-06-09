@@ -23,14 +23,14 @@ from __future__ import annotations
 
 import json
 import math
-import os
-import tempfile
 import uuid
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+from a11yfix._io import atomic_write as _atomic_write
 
 DEFAULT_BATCHES_ROOT = Path.home() / ".a11yfix" / "batches"
 
@@ -43,19 +43,6 @@ LARGE_FILE_BYTES = 50 * 1024 * 1024
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _atomic_write(path: Path, data: str) -> None:
-    """Write atomically: tmp + rename. Survives crashes mid-write."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as f:
-            f.write(data)
-        os.replace(tmp, path)
-    except Exception:
-        Path(tmp).unlink(missing_ok=True)
-        raise
 
 
 @dataclass
@@ -127,6 +114,8 @@ class BatchState:
         return None
 
     def status(self) -> str:
+        if not self.shards:
+            return "queued"
         if all(s.status == "done" for s in self.shards):
             return "done"
         if any(s.status == "running" for s in self.shards):
@@ -138,7 +127,7 @@ class BatchState:
     def recompute_totals(self) -> None:
         t = BatchTotals()
         for s in self.shards:
-            if s.status == "done":
+            if s.status in ("done", "partial", "failed"):
                 t.done += s.completed
                 t.failed += s.failed
             elif s.status == "running":
@@ -500,7 +489,12 @@ def aggregate_rollup(state_dir: Path | str) -> RollupResult:
                 continue
             try:
                 m = json.loads(Path(manifest_path).read_text())
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, OSError):
+                # Unreadable/corrupt manifest: keep files_total and the files
+                # list in agreement instead of silently dropping the entry.
+                result.files.append(
+                    {"file": entry.get("file"), "status": status, "manifest": None}
+                )
                 continue
 
             stage_2 = len(m.get("stage_2_fixes_applied") or [])

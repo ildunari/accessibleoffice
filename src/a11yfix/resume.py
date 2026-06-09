@@ -128,7 +128,7 @@ def write_resume_md(state_dir: Path | str) -> Path:
         f"**Files:** {files_total} total, "
         f"{completed_total} done, "
         f"{failed_total} failed, "
-        f"{files_total - completed_total - failed_total} pending"
+        f"{max(0, files_total - completed_total - failed_total)} pending"
     )
     if state.source_root:
         lines.append(f"**Source:** `{state.source_root}`")
@@ -142,7 +142,7 @@ def write_resume_md(state_dir: Path | str) -> Path:
         prog = read_progress(sd, s.id)
         sd_done = sum(1 for e in prog if e.get("status") == "done")
         sd_failed = sum(1 for e in prog if e.get("status") == "failed")
-        sd_pending = s.files - sd_done - sd_failed
+        sd_pending = max(0, s.files - sd_done - sd_failed)
         lines.append(
             f"| {s.id} | {s.files} | {s.status} | {sd_done} | {sd_failed} | {sd_pending} |"
         )
@@ -177,7 +177,9 @@ def write_resume_md(state_dir: Path | str) -> Path:
     lines.append("Per-shard progress: `<state-dir>/shards/<shard-id>/progress.jsonl`")
 
     out = sd / "RESUME.md"
-    out.write_text("\n".join(lines))
+    from a11yfix._io import atomic_write
+
+    atomic_write(out, "\n".join(lines))
     return out
 
 

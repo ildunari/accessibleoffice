@@ -101,7 +101,9 @@ class Manifest:
         }
 
     def write(self, path: Path | str) -> None:
-        Path(path).write_text(json.dumps(self.to_json(), indent=2))
+        from a11yfix._io import atomic_write
+
+        atomic_write(Path(path), json.dumps(self.to_json(), indent=2))
 
 
 def validate_manifest_dict(d: dict[str, Any]) -> list[str]:

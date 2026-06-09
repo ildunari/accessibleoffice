@@ -368,6 +368,7 @@ def _run_batch(
     """
     from a11yfix.batch import (
         BatchState,
+        read_progress,
         record_progress,
         set_shard_status,
         shard_pending_files,
@@ -402,12 +403,19 @@ def _run_batch(
         f"cap={('$' + format(cap, '.2f')) if cap else 'none'}"
     )
 
+    def _shard_outcome(shard_id: str) -> str:
+        """A shard with any failed file is 'partial', never 'done'."""
+        failed = sum(
+            1 for e in read_progress(state_dir, shard_id) if e.get("status") == "failed"
+        )
+        return "partial" if failed else "done"
+
     grand_done = 0
     grand_failed = 0
     for shard in state.shards:
         pending = shard_pending_files(state_dir, shard.id)
         if not pending:
-            set_shard_status(state_dir, shard.id, "done")
+            set_shard_status(state_dir, shard.id, _shard_outcome(shard.id))
             continue
         set_shard_status(state_dir, shard.id, "running")
         click.echo(f"[batch] {shard.id}: {len(pending)} files")
@@ -427,7 +435,10 @@ def _run_batch(
             manifest_out = f.parent / f"{f.stem}.manifest.json"
             import multiprocessing
 
-            ctx = multiprocessing.get_context()
+            # Explicit spawn: deterministic across platforms and safe even if
+            # the host process changed the global default to fork (open zip
+            # handles and the cost-meter flock are not fork-safe).
+            ctx = multiprocessing.get_context("spawn")
             fd, result_tmp = tempfile.mkstemp(
                 prefix="a11yfix-worker-", suffix=".pkl", dir=str(state_dir)
             )
@@ -443,7 +454,7 @@ def _run_batch(
                 "vlm": vlm,
                 "remediate": False,  # never spawn interactive in batch
                 "remediate_model": "claude-sonnet-4-6",
-                "dry_run": True,
+                "dry_run": False,  # unused while remediate=False
                 "print_to_terminal": False,
             }
             try:
@@ -495,17 +506,26 @@ def _run_batch(
                 Path(result_tmp).unlink(missing_ok=True)
 
             cost_delta = meter.total() - cost_before
-            if result.error and result.manifest is None:
+            if result.error or result.exit_code != 0:
+                # Any error fails the file — including "adapter unavailable",
+                # where a manifest exists but stage 3 was silently skipped.
                 record_progress(
                     state_dir,
                     shard.id,
                     file=str(f),
                     status="failed",
-                    error=result.error,
+                    manifest=str(result.manifest_path) if result.manifest_path else None,
+                    stage_2=result.stage_2_count,
+                    stage_3=result.stage_3_count,
+                    residual=result.residual_count,
+                    error=result.error or f"exit code {result.exit_code}",
                     cost_usd=cost_delta,
                 )
                 grand_failed += 1
-                click.echo(f"  [fail] {f.name}: {result.error}", err=True)
+                click.echo(
+                    f"  [fail] {f.name}: {result.error or f'exit code {result.exit_code}'}",
+                    err=True,
+                )
                 continue
 
             record_progress(
@@ -525,7 +545,7 @@ def _run_batch(
                 f"s3={result.stage_3_count} residual={result.residual_count} "
                 f"({result.elapsed_sec:.1f}s)"
             )
-        set_shard_status(state_dir, shard.id, "done")
+        set_shard_status(state_dir, shard.id, _shard_outcome(shard.id))
 
     rollup = write_rollup(state_dir)
     click.echo("")
@@ -691,6 +711,10 @@ def main(
     """Detect and fix accessibility issues in .docx and .pptx files."""
 
     # ---- Mode preset (still allow granular flags to override) ----
+    # Remember whether the user actually picked a mode: --resume without an
+    # explicit choice must continue with the batch's stored mode, never the
+    # CLI default (a scan batch silently resuming as auto would write files).
+    user_chose_mode = mode is not None or report_only or auto_only or remediate
     if mode is None and not (report_only or auto_only or remediate):
         mode = "auto"
     if mode == "scan":
@@ -719,8 +743,23 @@ def main(
         batch_mode = "scan" if report_only else ("auto" if auto_only else "full-dry")
 
         if resume_id:
+            from a11yfix.batch import BatchState
+
             sd = _resolve_batch_id(resume_id)
-            click.echo(f"[batch] resuming {sd.name}")
+            try:
+                stored_mode = BatchState.load(sd).mode
+            except (OSError, ValueError, KeyError, TypeError):
+                stored_mode = None
+            if stored_mode:
+                if not user_chose_mode:
+                    batch_mode = stored_mode
+                elif batch_mode != stored_mode:
+                    click.echo(
+                        f"[batch] warning: resuming with mode={batch_mode} "
+                        f"(batch was created with mode={stored_mode})",
+                        err=True,
+                    )
+            click.echo(f"[batch] resuming {sd.name}  mode={batch_mode}")
         else:
             from a11yfix.batch import (
                 create_batch,

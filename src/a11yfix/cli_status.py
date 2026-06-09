@@ -127,6 +127,10 @@ def _gc(root: Path, days: int) -> int:
             last = datetime.fromisoformat(state.last_updated)
         except ValueError:
             continue
+        if last.tzinfo is None:
+            # Older states may carry naive timestamps; treat them as UTC so
+            # the aware/naive comparison below can't raise and stall GC.
+            last = last.replace(tzinfo=UTC)
         if last >= cutoff:
             continue
         shutil.rmtree(child, ignore_errors=True)
