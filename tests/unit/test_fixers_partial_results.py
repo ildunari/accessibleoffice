@@ -47,7 +47,7 @@ class FakeRule:
 class ShortResultClient:
     backup_path = None
 
-    def __init__(self, path):
+    def __init__(self, path, **kwargs):
         self.path = path
 
     def __enter__(self):
@@ -214,7 +214,7 @@ def test_single_shot_pptx_alt_text_emits_officecli_alt_op(tmp_path, monkeypatch)
     class CapturingClient:
         backup_path = None
 
-        def __init__(self, path):
+        def __init__(self, path, **kwargs):
             self.path = path
 
         def __enter__(self):
@@ -270,7 +270,7 @@ def test_single_shot_docx_alt_text_emits_officecli_alt_op(tmp_path, monkeypatch)
     class CapturingClient:
         backup_path = None
 
-        def __init__(self, path):
+        def __init__(self, path, **kwargs):
             self.path = path
 
         def __enter__(self):

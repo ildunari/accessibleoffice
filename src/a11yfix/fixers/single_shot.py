@@ -25,7 +25,6 @@ from a11yfix.ooxml.officecli import OfficecliClient, OfficecliError
 from a11yfix.rules.base import REGISTRY, DocumentHandle, OfficecliOp
 
 CACHE_DIR = Path(os.environ.get("A11YFIX_CACHE", str(Path.home() / ".cache" / "a11yfix")))
-CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 CONFIDENCE_THRESHOLD = 0.6
 
@@ -37,7 +36,9 @@ class SingleShotResult:
 
 
 def _defer(finding: Finding, deferred: list[Finding], reason: str) -> None:
-    if not finding.why_human_needed or finding.why_human_needed.startswith("stage-3 deferred:"):
+    # Only fill in an empty reason — never clobber one set by detection or by
+    # an earlier deferral (Finding objects are shared with the manifest).
+    if not finding.why_human_needed:
         finding.why_human_needed = reason
     deferred.append(finding)
 
@@ -65,6 +66,8 @@ def _cache_put(payload: str, value: dict, *, min_confidence: float = 0.7) -> Non
         return
     if "UNCLEAR" in str(value.get("text", "")):
         return
+    # Created lazily so importing this module doesn't touch the filesystem.
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
     _cache_key(payload).write_text(json.dumps(value))
 
 
@@ -183,7 +186,9 @@ def apply_single_shot_fixes(
                 surrounding = str(
                     f.extra.get("paragraph_text") or f.extra.get("shape_text") or f.current_value
                 )
-                key = f"linktext|{f.id}|{url}|{surrounding[:200]}"
+                # Content-based key (no finding id): the same link in another
+                # paragraph or a later re-run still hits the cache.
+                key = f"linktext|{url}|{surrounding[:200]}"
                 cached = _cache_get(key)
                 if cached:
                     text, conf, model = cached["text"], cached["confidence"], cached["model"]
@@ -216,7 +221,8 @@ def apply_single_shot_fixes(
             elif ssf.kind == "slide-title":
                 slide_idx = int(f.extra.get("slide_index", 0))
                 text_ctx, layout = _slide_text(doc, slide_idx)
-                key = f"slidetitle|{f.id}|{layout}|{text_ctx[:200]}"
+                # Content-based key (no finding id) so re-runs hit the cache.
+                key = f"slidetitle|{layout}|{text_ctx[:200]}"
                 cached = _cache_get(key)
                 if cached:
                     text, conf, model = cached["text"], cached["confidence"], cached["model"]
@@ -260,7 +266,10 @@ def apply_single_shot_fixes(
     if not pending_ops:
         return SingleShotResult(applied=[], deferred=deferred)
 
-    client = OfficecliClient(doc.path)
+    # Distinct backup name: stage 2's ".bak" is the pristine pre-pipeline
+    # copy (recorded in the manifest) and must survive stage 3. Restoring
+    # here intentionally reverts to the post-stage-2 state, not the original.
+    client = OfficecliClient(doc.path, backup_suffix=".stage3.bak")
     try:
         with client:
             ops_only = [op for (_f, op, _t, _c) in pending_ops]

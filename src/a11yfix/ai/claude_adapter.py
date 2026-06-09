@@ -47,7 +47,13 @@ class ClaudeAdapter:
 
     # --- alt text ---
     def describe_image(self, image_bytes: bytes, *, max_chars: int, context: str) -> AltTextResult:
-        b64 = base64.b64encode(image_bytes).decode("ascii")
+        from a11yfix.ooxml.image_extract import ensure_vision_compatible
+
+        # Sniff the real format: the API only accepts png/jpeg/gif/webp and
+        # rejects declared-type/byte mismatches with a 400. Raises ValueError
+        # for unconvertible formats (EMF/WMF/SVG) — caller defers the finding.
+        send_bytes, media_type = ensure_vision_compatible(image_bytes)
+        b64 = base64.b64encode(send_bytes).decode("ascii")
         msg = self._client.messages.create(
             model=self._model,
             max_tokens=200,
@@ -60,7 +66,7 @@ class ClaudeAdapter:
                             "type": "image",
                             "source": {
                                 "type": "base64",
-                                "media_type": "image/png",
+                                "media_type": media_type,
                                 "data": b64,
                             },
                         },

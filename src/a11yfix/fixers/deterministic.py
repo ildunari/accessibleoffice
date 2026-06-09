@@ -74,7 +74,9 @@ def apply_deterministic_fixes(
             try:
                 result = client.batch(ops_only)
             except OfficecliError:
-                # Officecli not available or hard failure → defer everything
+                # Officecli not available or hard failure → defer everything.
+                # `findings` REPLACES the deferred list here (it equals
+                # deferred ∪ pending, each finding exactly once).
                 return DeterministicResult(
                     applied=[],
                     deferred=findings,

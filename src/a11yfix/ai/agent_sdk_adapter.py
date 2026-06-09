@@ -92,6 +92,7 @@ class ClaudeAgentSDKAdapter:
             ClaudeAgentOptions,
             ClaudeSDKError,
             CLIConnectionError,
+            CLINotFoundError,
             ProcessError,
             RateLimitEvent,
             ResultMessage,
@@ -136,6 +137,9 @@ class ClaudeAgentSDKAdapter:
                             ),
                         )
             if rate_limited and not chunks:
+                # Known limitation: a rate-limited stream usually ends without
+                # a ResultMessage, so the partial attempt's cost is never
+                # surfaced by the SDK and goes unrecorded in the ledger.
                 raise RateLimitedError("rate-limited mid-stream with no text")
             return "".join(chunks).strip()
 
@@ -143,13 +147,17 @@ class ClaudeAgentSDKAdapter:
         for attempt in range(MAX_RETRIES):
             try:
                 return _run_async(_go)
+            except CLINotFoundError:
+                # Permanent: the claude binary is missing; retrying can't help.
+                raise
             except RateLimitedError as exc:
                 last_exc = exc
             except (CLIConnectionError, ProcessError, ClaudeSDKError) as exc:
                 # Transient transport errors → retry.
                 last_exc = exc
-            sleep_for = BASE_BACKOFF_SEC * (2 ** attempt) + random.uniform(0, 0.25)
-            time.sleep(sleep_for)
+            if attempt < MAX_RETRIES - 1:  # no pointless sleep before the final raise
+                sleep_for = BASE_BACKOFF_SEC * (2 ** attempt) + random.uniform(0, 0.25)
+                time.sleep(sleep_for)
         raise RateLimitedError(
             f"adapter exhausted {MAX_RETRIES} retries: {last_exc}"
         ) from last_exc
@@ -243,14 +251,39 @@ def _run_async(coro_fn) -> Any:
             return pool.submit(lambda: asyncio.run(coro_fn())).result()
 
 
+_SUFFIX_BY_MEDIA = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "image/bmp": ".bmp",
+    "image/tiff": ".tiff",
+}
+
+
 def _prepare_image_for_read(image_bytes: bytes) -> tuple[bytes, str]:
-    """Bound image payloads before asking Claude Code's Read tool to ingest them."""
-    suffix = ".png" if image_bytes[:8].startswith(b"\x89PNG") else ".jpg"
-    if len(image_bytes) <= MAX_READ_IMAGE_BYTES:
+    """Bound image payloads before asking Claude Code's Read tool to ingest them.
+
+    Raises ValueError for formats the Read tool can't render (EMF/WMF/SVG/
+    unknown) so the caller defers the finding instead of getting a junk
+    description back.
+    """
+    from a11yfix.ooxml.image_extract import sniff_image
+
+    media = sniff_image(image_bytes)
+    suffix = _SUFFIX_BY_MEDIA.get(media or "")
+    if suffix is None:
+        raise ValueError(
+            f"unsupported image format for Read-tool vision: {media or 'unidentified bytes'}"
+        )
+    needs_convert = media in ("image/bmp", "image/tiff")
+    if len(image_bytes) <= MAX_READ_IMAGE_BYTES and not needs_convert:
         return image_bytes, suffix
     try:
         from PIL import Image, ImageOps  # type: ignore[import-untyped]
     except ImportError:
+        if needs_convert:
+            raise ValueError(f"{media} requires Pillow to convert for vision") from None
         return image_bytes, suffix
     try:
         with Image.open(io.BytesIO(image_bytes)) as im:

@@ -30,7 +30,73 @@ _MIME_BY_EXT = {
     ".tif": "image/tiff",
     ".tiff": "image/tiff",
     ".svg": "image/svg+xml",
+    ".emf": "image/x-emf",
+    ".wmf": "image/x-wmf",
 }
+
+# The only media types the Anthropic Messages API accepts for base64 image
+# blocks. The API validates declared type against actual bytes and rejects
+# mismatches with a 400, so callers must sniff — never trust the extension.
+VISION_API_MEDIA_TYPES = frozenset(
+    {"image/png", "image/jpeg", "image/gif", "image/webp"}
+)
+
+
+def sniff_image(data: bytes) -> str | None:
+    """Identify an image format from magic bytes. Returns a MIME type or None."""
+    if not data:
+        return None
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:2] == b"BM":
+        return "image/bmp"
+    if data[:4] in (b"II*\x00", b"MM\x00*"):
+        return "image/tiff"
+    if len(data) >= 44 and data[40:44] == b" EMF":
+        return "image/x-emf"
+    if data[:4] == b"\xd7\xcd\xc6\x9a" or data[:4] == b"\x01\x00\x09\x00":
+        return "image/x-wmf"
+    head = data[:256].lstrip()
+    if head.startswith(b"<svg") or (head.startswith(b"<?xml") and b"<svg" in data[:1024]):
+        return "image/svg+xml"
+    return None
+
+
+def ensure_vision_compatible(data: bytes) -> tuple[bytes, str]:
+    """Return (bytes, media_type) safe to send to the Anthropic vision API.
+
+    PNG/JPEG/GIF/WebP pass through with their sniffed type. BMP/TIFF are
+    converted to PNG via Pillow when available. Vector/metafile formats
+    (EMF, WMF, SVG) and unidentifiable bytes raise ValueError so callers
+    defer the finding instead of triggering a guaranteed API 400.
+    """
+    media = sniff_image(data)
+    if media in VISION_API_MEDIA_TYPES:
+        return data, media  # type: ignore[return-value]
+    if media in ("image/bmp", "image/tiff"):
+        try:
+            import io
+
+            from PIL import Image  # type: ignore[import-untyped]
+        except ImportError as exc:
+            raise ValueError(
+                f"{media} requires Pillow to convert for the vision API"
+            ) from exc
+        with Image.open(io.BytesIO(data)) as im:
+            if im.mode not in ("RGB", "RGBA", "L"):
+                im = im.convert("RGB")
+            out = io.BytesIO()
+            im.save(out, format="PNG")
+        return out.getvalue(), "image/png"
+    raise ValueError(
+        f"unsupported image format for vision API: {media or 'unidentified bytes'}"
+    )
 
 
 def _mime_for(target: str) -> str:
@@ -169,9 +235,7 @@ def _extract_pptx(doc: DocumentHandle, finding: Finding) -> tuple[bytes, str] | 
     if not target:
         return None
     # PPT slide rels typically target ../media/imageN.png — normalize to ppt/media/...
-    member = target.lstrip("./")
-    if member.startswith("../"):
-        member = member[3:]
+    member = _strip_rel_prefixes(target)
     if not member.startswith("ppt/"):
         member = f"ppt/{member}"
     return _read_zip_member_abs(doc.path, member)
@@ -188,12 +252,26 @@ def _pic_index_in_para(finding: Finding) -> int:
     return 1
 
 
+def _strip_rel_prefixes(target: str) -> str:
+    """Drop leading './' and '../' segments from a relationship target.
+
+    str.lstrip("./") would strip *characters*, not prefixes, mangling names
+    like '...dots.png'; strip explicit path segments instead.
+    """
+    member = target
+    while True:
+        if member.startswith("./"):
+            member = member[2:]
+        elif member.startswith("../"):
+            member = member[3:]
+        else:
+            return member
+
+
 def _read_zip_member(
     docx_path: str, prefix: str, target: str
 ) -> tuple[bytes, str] | None:
-    member = target.lstrip("./")
-    if member.startswith("../"):
-        member = member[3:]
+    member = _strip_rel_prefixes(target)
     if not member.startswith(f"{prefix}/"):
         member = f"{prefix}/{member}"
     return _read_zip_member_abs(docx_path, member)
@@ -203,8 +281,15 @@ def _read_zip_member_abs(zpath: str, member: str) -> tuple[bytes, str] | None:
     try:
         with zipfile.ZipFile(zpath) as zf:
             if member not in zf.namelist():
-                # try without leading folder normalization
-                cand = [n for n in zf.namelist() if n.endswith("/" + Path(member).name)]
+                # Fall back to a basename match, but stay inside the same
+                # top-level part (word/ vs ppt/) so a hybrid package can't
+                # hand back an image from the wrong document part.
+                part_prefix = member.split("/", 1)[0] + "/"
+                cand = [
+                    n
+                    for n in zf.namelist()
+                    if n.endswith("/" + Path(member).name) and n.startswith(part_prefix)
+                ]
                 if not cand:
                     return None
                 member = cand[0]

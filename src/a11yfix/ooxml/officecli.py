@@ -22,6 +22,11 @@ class OfficecliError(RuntimeError):
     """Raised on officecli invocation failure (process error, parse error, etc.)."""
 
 
+# Wall-clock cap for a single officecli invocation. Without it a hung
+# subprocess (corrupt file, AV hold) blocks the caller forever.
+OFFICECLI_TIMEOUT_SEC = 120
+
+
 @dataclass
 class BatchResult:
     success: bool
@@ -41,7 +46,14 @@ class ValidationResult:
 
 
 def _run(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    proc = subprocess.run(args, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(
+            args, capture_output=True, text=True, timeout=OFFICECLI_TIMEOUT_SEC
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise OfficecliError(
+            f"officecli timed out after {OFFICECLI_TIMEOUT_SEC}s: {' '.join(args[:3])}"
+        ) from exc
     if check and proc.returncode != 0:
         raise OfficecliError(
             f"officecli exited {proc.returncode}: {proc.stderr.strip() or proc.stdout.strip()}"
@@ -52,9 +64,19 @@ def _run(args: list[str], *, check: bool = True) -> subprocess.CompletedProcess[
 class OfficecliClient:
     """Context manager that takes a backup snapshot on entry and supports restore."""
 
-    def __init__(self, file_path: str | Path, *, binary: str = "officecli") -> None:
+    def __init__(
+        self,
+        file_path: str | Path,
+        *,
+        binary: str = "officecli",
+        backup_suffix: str = ".bak",
+    ) -> None:
         self.file_path = Path(file_path).resolve()
         self.binary = binary
+        # Per-stage suffix: stage 2 keeps the default ".bak" (the pristine
+        # pre-pipeline copy the manifest points at); stage 3 must use a
+        # distinct name so it can't stomp that original.
+        self._backup_suffix = backup_suffix
         self._backup_path: Path | None = None
 
     # -- context manager --
@@ -72,7 +94,7 @@ class OfficecliClient:
     def _snapshot(self) -> None:
         backup_dir = self.file_path.parent / ".a11yfix"
         backup_dir.mkdir(exist_ok=True)
-        self._backup_path = backup_dir / f"{self.file_path.name}.bak"
+        self._backup_path = backup_dir / f"{self.file_path.name}{self._backup_suffix}"
         shutil.copy2(self.file_path, self._backup_path)
 
     @property
