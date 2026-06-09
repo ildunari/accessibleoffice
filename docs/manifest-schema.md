@@ -25,16 +25,16 @@ Schema is versioned. Breaking changes bump `schema_version`.
 
 ```json
 {
-  "id": "alt-3-pic-2",
+  "id": "alt-3-picture-42",
   "rule_id": "alt-text-missing",
   "severity": "error",
   "wcag_sc": ["1.1.1"],
-  "officecli_path": "/sld[3]/pic[2]",
+  "officecli_path": "/slide[3]/picture[@id=42]",
   "current_value": "",
   "plain_impact": "Screen readers cannot describe this image to users.",
   "why_human_needed": "",
   "related_findings": [],
-  "extra": {"shape_kind": "pic", "shape_name": "Picture 2", "slide_index": 3}
+  "extra": {"shape_kind": "picture", "shape_name": "Picture 2", "slide_index": 3}
 }
 ```
 
@@ -46,9 +46,9 @@ Schema is versioned. Breaking changes bump `schema_version`.
 
 ```json
 {
-  "finding_id": "alt-3-pic-2",
+  "finding_id": "alt-3-picture-42",
   "rule_id": "alt-text-missing",
-  "officecli_path": "/sld[3]/pic[2]",
+  "officecli_path": "/slide[3]/picture[@id=42]",
   "stage": 3,
   "before": "",
   "after": "Bar chart showing Q3 revenue by region",

@@ -24,7 +24,7 @@ class OfficecliOp:
     """
 
     verb: str  # "set" | "add" | "remove" | "swap" | "move" | "raw-set"
-    path: str  # e.g. "/sld[3]/pic[1]" or "/body/p[2]/r[1]"
+    path: str  # e.g. "/slide[3]/picture[@id=4]" or "/body/p[2]/r[1]"
     props: dict[str, str] = field(default_factory=dict)
     # for raw-set:
     part: str | None = None

@@ -63,7 +63,7 @@ def test_pptx_real_picture_without_alt_is_flagged_amid_text_shapes(tmp_path):
     findings = list(AltTextRule().detect(doc))
 
     assert len(findings) == 1
-    assert findings[0].officecli_path.startswith("/sld[1]/pic[@id=")
+    assert findings[0].officecli_path.startswith("/slide[1]/picture[@id=")
 
 
 def test_pptx_image_filled_shape_without_alt_is_flagged_and_extractable(tmp_path):
@@ -98,7 +98,7 @@ def test_pptx_image_filled_shape_without_alt_is_flagged_and_extractable(tmp_path
     findings = list(AltTextRule().detect(doc))
 
     assert len(findings) == 1
-    assert findings[0].officecli_path.startswith("/sld[1]/sp[@id=")
+    assert findings[0].officecli_path.startswith("/slide[1]/shape[@id=")
     extracted = extract_image_for_finding(doc, findings[0])
     assert extracted is not None
     assert extracted[1] == "image/png"
@@ -191,7 +191,7 @@ def test_pptx_chart_without_alt_is_flagged_as_object_alt(tmp_path):
     findings = list(AltTextRule().detect(open_pptx(path)))
 
     assert len(findings) == 1
-    assert findings[0].officecli_path.startswith("/sld[1]/chart[@id=")
+    assert findings[0].officecli_path.startswith("/slide[1]/chart[@id=")
     assert findings[0].extra["shape_kind"] == "chart"
 
 
@@ -216,3 +216,167 @@ def test_pptx_chart_with_alt_is_not_flagged(tmp_path):
     findings = list(AltTextRule().detect(open_pptx(path)))
 
     assert findings == []
+
+
+def test_pptx_grouped_picture_path_includes_group_scope(tmp_path):
+    pres = Presentation()
+    slide = pres.slides.add_slide(pres.slide_layouts[6])
+    group = parse_xml(
+        f"""
+        <p:grpSp {nsdecls("p", "a", "r")}>
+          <p:nvGrpSpPr>
+            <p:cNvPr id="99" name="Grouped objects"/>
+            <p:cNvGrpSpPr/>
+            <p:nvPr/>
+          </p:nvGrpSpPr>
+          <p:grpSpPr>
+            <a:xfrm>
+              <a:off x="0" y="0"/><a:ext cx="1" cy="1"/>
+              <a:chOff x="0" y="0"/><a:chExt cx="1" cy="1"/>
+            </a:xfrm>
+          </p:grpSpPr>
+          <p:pic>
+            <p:nvPicPr>
+              <p:cNvPr id="100" name="Grouped picture"/>
+              <p:cNvPicPr/>
+              <p:nvPr/>
+            </p:nvPicPr>
+            <p:blipFill/>
+            <p:spPr/>
+          </p:pic>
+        </p:grpSp>
+        """
+    )
+    slide._element.spTree.append(group)
+    path = tmp_path / "grouped_picture.pptx"
+    pres.save(path)
+
+    findings = list(AltTextRule().detect(open_pptx(path)))
+    picture = next(f for f in findings if f.extra["shape_kind"] == "picture")
+
+    assert picture.officecli_path == "/slide[1]/group[@id=99]/picture[@id=100]"
+
+
+def test_pptx_nested_grouped_picture_path_includes_full_group_scope(tmp_path):
+    pres = Presentation()
+    slide = pres.slides.add_slide(pres.slide_layouts[6])
+    group = parse_xml(
+        f"""
+        <p:grpSp {nsdecls("p", "a", "r")}>
+          <p:nvGrpSpPr>
+            <p:cNvPr id="90" name="Outer group"/>
+            <p:cNvGrpSpPr/>
+            <p:nvPr/>
+          </p:nvGrpSpPr>
+          <p:grpSpPr>
+            <a:xfrm>
+              <a:off x="0" y="0"/><a:ext cx="1" cy="1"/>
+              <a:chOff x="0" y="0"/><a:chExt cx="1" cy="1"/>
+            </a:xfrm>
+          </p:grpSpPr>
+          <p:grpSp>
+            <p:nvGrpSpPr>
+              <p:cNvPr id="99" name="Inner group"/>
+              <p:cNvGrpSpPr/>
+              <p:nvPr/>
+            </p:nvGrpSpPr>
+            <p:grpSpPr>
+              <a:xfrm>
+                <a:off x="0" y="0"/><a:ext cx="1" cy="1"/>
+                <a:chOff x="0" y="0"/><a:chExt cx="1" cy="1"/>
+              </a:xfrm>
+            </p:grpSpPr>
+            <p:pic>
+              <p:nvPicPr>
+                <p:cNvPr id="100" name="Nested grouped picture"/>
+                <p:cNvPicPr/>
+                <p:nvPr/>
+              </p:nvPicPr>
+              <p:blipFill/>
+              <p:spPr/>
+            </p:pic>
+          </p:grpSp>
+        </p:grpSp>
+        """
+    )
+    slide._element.spTree.append(group)
+    path = tmp_path / "nested_grouped_picture.pptx"
+    pres.save(path)
+
+    findings = list(AltTextRule().detect(open_pptx(path)))
+    picture = next(f for f in findings if f.extra["shape_kind"] == "picture")
+
+    assert picture.officecli_path == (
+        "/slide[1]/group[@id=90]/group[@id=99]/picture[@id=100]"
+    )
+
+
+def test_pptx_picture_inside_idless_group_is_not_flattened_to_slide_path(tmp_path):
+    pres = Presentation()
+    slide = pres.slides.add_slide(pres.slide_layouts[6])
+    group = parse_xml(
+        f"""
+        <p:grpSp {nsdecls("p", "a", "r")}>
+          <p:nvGrpSpPr>
+            <p:cNvPr name="Idless group"/>
+            <p:cNvGrpSpPr/>
+            <p:nvPr/>
+          </p:nvGrpSpPr>
+          <p:grpSpPr>
+            <a:xfrm>
+              <a:off x="0" y="0"/><a:ext cx="1" cy="1"/>
+              <a:chOff x="0" y="0"/><a:chExt cx="1" cy="1"/>
+            </a:xfrm>
+          </p:grpSpPr>
+          <p:pic>
+            <p:nvPicPr>
+              <p:cNvPr id="100" name="Grouped picture"/>
+              <p:cNvPicPr/>
+              <p:nvPr/>
+            </p:nvPicPr>
+            <p:blipFill/>
+            <p:spPr/>
+          </p:pic>
+        </p:grpSp>
+        """
+    )
+    slide._element.spTree.append(group)
+    path = tmp_path / "idless_grouped_picture.pptx"
+    pres.save(path)
+
+    findings = list(AltTextRule().detect(open_pptx(path)))
+
+    assert [f.officecli_path for f in findings] == []
+
+
+def test_pptx_smartart_is_scan_only_not_fixable(tmp_path):
+    pres = Presentation()
+    slide = pres.slides.add_slide(pres.slide_layouts[6])
+    smartart = parse_xml(
+        f"""
+        <p:graphicFrame {nsdecls("p", "a", "r")}>
+          <p:nvGraphicFramePr>
+            <p:cNvPr id="77" name="SmartArt"/>
+            <p:cNvGraphicFramePr/>
+            <p:nvPr/>
+          </p:nvGraphicFramePr>
+          <p:xfrm>
+            <a:off x="0" y="0"/><a:ext cx="1" cy="1"/>
+          </p:xfrm>
+          <a:graphic>
+            <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/diagram"/>
+          </a:graphic>
+        </p:graphicFrame>
+        """
+    )
+    slide._element.spTree.append(smartart)
+    path = tmp_path / "smartart.pptx"
+    pres.save(path)
+
+    doc = open_pptx(path)
+    finding = next(iter(AltTextRule().detect(doc)))
+
+    assert finding.officecli_path == "/slide[1]"
+    assert finding.extra["shape_kind"] == "smartArt"
+    assert finding.why_human_needed is not None
+    assert AltTextRule().fix_single_shot(finding, doc) is None

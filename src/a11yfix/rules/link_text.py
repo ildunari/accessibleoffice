@@ -13,6 +13,7 @@ from collections.abc import Iterable
 from a11yfix.manifest import FileFormat, Finding, Severity
 from a11yfix.ooxml.docx_paths import iter_paragraph_refs
 from a11yfix.ooxml.namespaces import qn
+from a11yfix.ooxml.pptx_paths import ppt_target_ref
 from a11yfix.rules.base import (
     BaseRule,
     DocumentHandle,
@@ -106,36 +107,52 @@ class LinkTextRule(BaseRule):
         slide_rels = _pptx_slide_rels(doc)
         for slide_idx, slide_xml in enumerate(doc.slides_xml, start=1):
             rels = slide_rels.get(slide_idx, {})
-            for sp_idx, sp in enumerate(slide_xml.iter(qn("p:sp")), start=1):
+            sp_tree = slide_xml.find(f".//{qn('p:cSld')}/{qn('p:spTree')}")
+            if sp_tree is None:
+                continue
+            for sp in slide_xml.iter(qn("p:sp")):
+                sp_ref = ppt_target_ref(
+                    slide_idx=slide_idx,
+                    sp_tree=sp_tree,
+                    element=sp,
+                    element_name="shape",
+                    cnv_path=f"{qn('p:nvSpPr')}/{qn('p:cNvPr')}",
+                )
+                if sp_ref is None:
+                    continue
                 sp_text = "".join(t.text or "" for t in sp.iter(qn("a:t"))).strip()
-                for r_idx, r in enumerate(sp.iter(qn("a:r")), start=1):
-                    rPr = r.find(qn("a:rPr"))
-                    if rPr is None:
-                        continue
-                    hlink = rPr.find(qn("a:hlinkClick"))
-                    if hlink is None:
-                        continue
-                    rel_id = hlink.get(qn("r:id")) or ""
-                    url = rels.get(rel_id, "") if rel_id else ""
-                    t = r.find(qn("a:t"))
-                    text = (t.text or "") if t is not None else ""
-                    if not _is_generic(text, url=url):
-                        continue
-                    yield Finding(
-                        id=f"link-sld{slide_idx}-sp{sp_idx}-r{r_idx}",
-                        rule_id=self.meta.rule_id,
-                        severity=self.meta.severity,
-                        wcag_sc=self.meta.wcag_sc,
-                        officecli_path=f"/sld[{slide_idx}]/sp[{sp_idx}]/p[1]/r[{r_idx}]",
-                        current_value=text.strip(),
-                        plain_impact=self.meta.plain_impact,
-                        extra={
-                            "slide_index": slide_idx,
-                            "rel_id": rel_id,
-                            "url": url,
-                            "shape_text": sp_text,
-                        },
-                    )
+                for p_idx, para in enumerate(sp.iter(qn("a:p")), start=1):
+                    for r_idx, r in enumerate(para.findall(qn("a:r")), start=1):
+                        rPr = r.find(qn("a:rPr"))
+                        if rPr is None:
+                            continue
+                        hlink = rPr.find(qn("a:hlinkClick"))
+                        if hlink is None:
+                            continue
+                        rel_id = hlink.get(qn("r:id")) or ""
+                        url = rels.get(rel_id, "") if rel_id else ""
+                        t = r.find(qn("a:t"))
+                        text = (t.text or "") if t is not None else ""
+                        if not _is_generic(text, url=url):
+                            continue
+                        yield Finding(
+                            id=(
+                                f"link-slide{slide_idx}-shape{sp_ref.shape_id}"
+                                f"-p{p_idx}-r{r_idx}"
+                            ),
+                            rule_id=self.meta.rule_id,
+                            severity=self.meta.severity,
+                            wcag_sc=self.meta.wcag_sc,
+                            officecli_path=f"{sp_ref.path}/p[{p_idx}]/r[{r_idx}]",
+                            current_value=text.strip(),
+                            plain_impact=self.meta.plain_impact,
+                            extra={
+                                "slide_index": slide_idx,
+                                "rel_id": rel_id,
+                                "url": url,
+                                "shape_text": sp_text,
+                            },
+                        )
 
     def fix_single_shot(self, finding: Finding, doc: DocumentHandle) -> SingleShotFix | None:
         return SingleShotFix(kind="link-text", finding=finding, context=dict(finding.extra))

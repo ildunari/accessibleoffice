@@ -12,6 +12,7 @@ from collections.abc import Iterable
 
 from a11yfix.manifest import FileFormat, Finding, Severity
 from a11yfix.ooxml.namespaces import qn
+from a11yfix.ooxml.pptx_paths import ppt_target_ref
 from a11yfix.rules.base import BaseRule, DocumentHandle, RuleMeta, register_rule
 
 DECORATIVE_PRESET_GEOMETRIES = {
@@ -35,7 +36,19 @@ class DecorativeFlagRule(BaseRule):
 
         assert isinstance(doc, PptxHandle)
         for slide_idx, slide_xml in enumerate(doc.slides_xml, start=1):
-            for sp_idx, sp in enumerate(slide_xml.iter(qn("p:sp")), start=1):
+            sp_tree = slide_xml.find(f".//{qn('p:cSld')}/{qn('p:spTree')}")
+            if sp_tree is None:
+                continue
+            for sp in slide_xml.iter(qn("p:sp")):
+                sp_ref = ppt_target_ref(
+                    slide_idx=slide_idx,
+                    sp_tree=sp_tree,
+                    element=sp,
+                    element_name="shape",
+                    cnv_path=f"{qn('p:nvSpPr')}/{qn('p:cNvPr')}",
+                )
+                if sp_ref is None:
+                    continue
                 # has any text?
                 txBody = sp.find(qn("p:txBody"))
                 text = ""
@@ -74,11 +87,11 @@ class DecorativeFlagRule(BaseRule):
                 if already:
                     continue
                 yield Finding(
-                    id=f"decor-sld{slide_idx}-sp{sp_idx}",
+                    id=f"decor-slide{slide_idx}-shape{sp_ref.shape_id}",
                     rule_id=self.meta.rule_id,
                     severity=self.meta.severity,
                     wcag_sc=self.meta.wcag_sc,
-                    officecli_path=f"/sld[{slide_idx}]/sp[{sp_idx}]",
+                    officecli_path=sp_ref.path,
                     current_value=f"empty {prst} shape",
                     plain_impact=self.meta.plain_impact,
                     extra={"prst": prst, "auto_fixable": prst == "line"},

@@ -108,7 +108,7 @@ def _finding(i: int) -> Finding:
         rule_id="fake-rule",
         severity=Severity.ERROR,
         wcag_sc=[],
-        officecli_path=f"/sld[1]/pic[{i}]",
+        officecli_path=f"/slide[1]/picture[@id={i}]",
         extra={"url": "https://example.com", "shape_text": "click"},
     )
 

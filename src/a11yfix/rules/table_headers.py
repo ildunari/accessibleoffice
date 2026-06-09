@@ -16,6 +16,8 @@ from collections.abc import Iterable
 from a11yfix.manifest import FileFormat, Finding, Severity
 from a11yfix.ooxml.docx_paths import iter_table_refs
 from a11yfix.ooxml.namespaces import qn
+from a11yfix.ooxml.pptx_paths import ppt_table_ref
+from a11yfix.ooxml.toggles import attr_bool_enabled, w_on_off_enabled
 from a11yfix.rules.base import (
     BaseRule,
     DocumentHandle,
@@ -29,22 +31,15 @@ def _row_has_tblheader(tr: object) -> bool:
     trPr = tr.find(qn("w:trPr"))  # type: ignore[union-attr]
     if trPr is None:
         return False
-    tbl_header = trPr.find(qn("w:tblHeader"))
-    if tbl_header is None:
-        return False
-    val = (tbl_header.get(qn("w:val")) or tbl_header.get("val") or "").lower()
-    return val not in {"0", "false", "off"}
+    return w_on_off_enabled(trPr.find(qn("w:tblHeader")))
 
 
 def _row_appears_visually_header(tr: object) -> bool:
     """Heuristic for stage-2 deterministic fix: bold text or distinct fill."""
-    # Bold runs in any cell?
-    for r in tr.iter(qn("w:r")):  # type: ignore[union-attr]
-        rPr = r.find(qn("w:rPr"))
-        if rPr is not None and rPr.find(qn("w:b")) is not None:
-            return True
-    # Cell shading?
-    for tc in tr.iter(qn("w:tc")):  # type: ignore[union-attr]
+    for tc in tr.findall(qn("w:tc")):  # type: ignore[union-attr]
+        for p in tc.findall(qn("w:p")):
+            if _direct_paragraph_has_bold_run(p):
+                return True
         tcPr = tc.find(qn("w:tcPr"))
         if tcPr is not None:
             shd = tcPr.find(qn("w:shd"))
@@ -53,10 +48,22 @@ def _row_appears_visually_header(tr: object) -> bool:
     return False
 
 
+def _direct_paragraph_has_bold_run(p: object) -> bool:
+    for child in p:  # type: ignore[union-attr]
+        runs = [child] if child.tag == qn("w:r") else []
+        if child.tag == qn("w:hyperlink"):
+            runs = list(child.findall(qn("w:r")))
+        for r in runs:
+            rPr = r.find(qn("w:rPr"))
+            if rPr is not None and w_on_off_enabled(rPr.find(qn("w:b"))):
+                return True
+    return False
+
+
 def _ppt_row_appears_visually_header(tr: object) -> bool:
     for r in tr.iter(qn("a:r")):  # type: ignore[union-attr]
         rPr = r.find(qn("a:rPr"))
-        if rPr is not None and rPr.get("b") == "1":
+        if rPr is not None and attr_bool_enabled(rPr.get("b")):
             return True
     for tc in tr.findall(qn("a:tc")):  # type: ignore[union-attr]
         tcPr = tc.find(qn("a:tcPr"))
@@ -114,7 +121,10 @@ class TableHeaderRule(BaseRule):
 
         assert isinstance(doc, PptxHandle)
         for slide_idx, slide_xml in enumerate(doc.slides_xml, start=1):
-            for tbl_idx, tbl in enumerate(slide_xml.iter(qn("a:tbl")), start=1):
+            sp_tree = slide_xml.find(f".//{qn('p:cSld')}/{qn('p:spTree')}")
+            if sp_tree is None:
+                continue
+            for tbl in slide_xml.iter(qn("a:tbl")):
                 rows = list(tbl.findall(qn("a:tr")))
                 if not rows or len(rows) < 2 or len(rows[0].findall(qn("a:tc"))) < 2:
                     continue
@@ -122,17 +132,21 @@ class TableHeaderRule(BaseRule):
                 first_row = tblPr.get("firstRow") if tblPr is not None else None
                 if first_row == "1":
                     continue
+                table_ref = ppt_table_ref(slide_idx=slide_idx, sp_tree=sp_tree, tbl=tbl)
+                if table_ref is None:
+                    continue
                 yield Finding(
-                    id=f"sld{slide_idx}-tbl{tbl_idx}-hdr",
+                    id=f"slide{slide_idx}-tbl{table_ref.shape_id}-hdr",
                     rule_id=self.meta.rule_id,
                     severity=self.meta.severity,
                     wcag_sc=self.meta.wcag_sc,
-                    officecli_path=f"/sld[{slide_idx}]/table[{tbl_idx}]",
+                    officecli_path=table_ref.path,
                     current_value="firstRow=0",
                     plain_impact=self.meta.plain_impact,
                     extra={
                         "slide_index": slide_idx,
-                        "table_index": tbl_idx,
+                        "table_id": table_ref.shape_id,
+                        "table_name": table_ref.shape_name,
                         "visually_header": _ppt_row_appears_visually_header(rows[0]),
                     },
                 )

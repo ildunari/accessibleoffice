@@ -118,3 +118,27 @@ def test_inherited_paragraph_text_color_is_resolved(tmp_path):
     findings = list(ColorContrastRule().detect(doc))
 
     assert findings == []
+
+
+def test_contrast_in_second_paragraph_uses_second_paragraph_path(tmp_path):
+    pres = Presentation()
+    slide = pres.slides.add_slide(pres.slide_layouts[6])
+    bg = parse_xml(
+        f'<p:bg {nsdecls("p", "a")}><p:bgPr><a:solidFill><a:srgbClr val="FFFFFF"/>'
+        "</a:solidFill></p:bgPr></p:bg>"
+    )
+    slide._element.cSld.insert(0, bg)
+    shape = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(4), Inches(2))
+    shape.text_frame.paragraphs[0].text = "Intro"
+    paragraph = shape.text_frame.add_paragraph()
+    run = paragraph.add_run()
+    run.text = "Low contrast"
+    run.font.color.rgb = RGBColor(255, 255, 255)
+    path = tmp_path / "contrast_p2.pptx"
+    pres.save(path)
+
+    findings = list(ColorContrastRule().detect(open_pptx(path)))
+
+    assert len(findings) == 1
+    assert findings[0].officecli_path.endswith("/p[2]/r[1]")
+    assert findings[0].officecli_path.startswith("/slide[1]/shape[@id=")

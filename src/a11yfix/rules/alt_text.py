@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from a11yfix.manifest import FileFormat, Finding, Severity
 from a11yfix.ooxml.docx_paths import iter_paragraph_refs, iter_run_refs
 from a11yfix.ooxml.namespaces import qn
+from a11yfix.ooxml.pptx_paths import ppt_target_ref, slide_path
 from a11yfix.rules.base import (
     BaseRule,
     DocumentHandle,
@@ -124,16 +125,16 @@ def _raw_alt(cnvpr: object) -> str:
 def _shape_target(
     *,
     shape_kind: str,
-    element_name: str,
     cnv: object,
     slide_idx: int,
+    officecli_path: str,
 ) -> _ImageTarget:
     shape_id = cnv.get("id") or "0"  # type: ignore[union-attr]
     return _ImageTarget(
         shape_kind=shape_kind,
         shape_id=shape_id,
         shape_name=cnv.get("name") or "(unnamed)",  # type: ignore[union-attr]
-        officecli_path=f"/sld[{slide_idx}]/{element_name}[@id={shape_id}]",
+        officecli_path=officecli_path,
         alt_text=_raw_alt(cnv),
         cnv=cnv,
         slide_index=slide_idx,
@@ -163,23 +164,41 @@ def _pptx_image_targets(doc: DocumentHandle) -> Iterable[_ImageTarget]:
         if spTree is None:
             continue
         for pic in spTree.iter(qn("p:pic")):
-            nv = pic.find(qn("p:nvPicPr"))
-            if nv is None:
+            cnv = pic.find(f"{qn('p:nvPicPr')}/{qn('p:cNvPr')}")
+            target_ref = ppt_target_ref(
+                slide_idx=slide_idx,
+                sp_tree=spTree,
+                element=pic,
+                element_name="picture",
+                cnv_path=f"{qn('p:nvPicPr')}/{qn('p:cNvPr')}",
+            )
+            if target_ref is None or cnv is None:
                 continue
-            cnv = nv.find(qn("p:cNvPr"))
-            if cnv is None:
-                continue
-            yield _shape_target(shape_kind="pic", element_name="pic", cnv=cnv, slide_idx=slide_idx)
+            yield _shape_target(
+                shape_kind="picture",
+                cnv=cnv,
+                slide_idx=slide_idx,
+                officecli_path=target_ref.path,
+            )
         for sp in spTree.iter(qn("p:sp")):
             if not _has_blip_fill(sp):
                 continue
-            nv = sp.find(qn("p:nvSpPr"))
-            if nv is None:
+            cnv = sp.find(f"{qn('p:nvSpPr')}/{qn('p:cNvPr')}")
+            target_ref = ppt_target_ref(
+                slide_idx=slide_idx,
+                sp_tree=spTree,
+                element=sp,
+                element_name="shape",
+                cnv_path=f"{qn('p:nvSpPr')}/{qn('p:cNvPr')}",
+            )
+            if target_ref is None or cnv is None:
                 continue
-            cnv = nv.find(qn("p:cNvPr"))
-            if cnv is None:
-                continue
-            yield _shape_target(shape_kind="sp", element_name="sp", cnv=cnv, slide_idx=slide_idx)
+            yield _shape_target(
+                shape_kind="shape",
+                cnv=cnv,
+                slide_idx=slide_idx,
+                officecli_path=target_ref.path,
+            )
         for graphic_frame in spTree.iter(qn("p:graphicFrame")):
             kind = _graphic_frame_kind(graphic_frame)
             if kind is None:
@@ -190,24 +209,45 @@ def _pptx_image_targets(doc: DocumentHandle) -> Iterable[_ImageTarget]:
             cnv = nv.find(qn("p:cNvPr"))
             if cnv is None:
                 continue
+            if kind == "smartArt":
+                yield _shape_target(
+                    shape_kind=kind,
+                    cnv=cnv,
+                    slide_idx=slide_idx,
+                    officecli_path=slide_path(slide_idx),
+                )
+                continue
+            target_ref = ppt_target_ref(
+                slide_idx=slide_idx,
+                sp_tree=spTree,
+                element=graphic_frame,
+                element_name="chart",
+                cnv_path=f"{qn('p:nvGraphicFramePr')}/{qn('p:cNvPr')}",
+            )
+            if target_ref is None:
+                continue
             yield _shape_target(
                 shape_kind=kind,
-                element_name=kind,
                 cnv=cnv,
                 slide_idx=slide_idx,
+                officecli_path=target_ref.path,
             )
         for group in spTree.iter(qn("p:grpSp")):
-            nv = group.find(qn("p:nvGrpSpPr"))
-            if nv is None:
-                continue
-            cnv = nv.find(qn("p:cNvPr"))
-            if cnv is None:
+            cnv = group.find(f"{qn('p:nvGrpSpPr')}/{qn('p:cNvPr')}")
+            target_ref = ppt_target_ref(
+                slide_idx=slide_idx,
+                sp_tree=spTree,
+                element=group,
+                element_name="group",
+                cnv_path=f"{qn('p:nvGrpSpPr')}/{qn('p:cNvPr')}",
+            )
+            if target_ref is None or cnv is None:
                 continue
             yield _shape_target(
                 shape_kind="group",
-                element_name="group",
                 cnv=cnv,
                 slide_idx=slide_idx,
+                officecli_path=target_ref.path,
             )
 
 
@@ -252,6 +292,10 @@ def _docx_image_targets(doc: DocumentHandle) -> Iterable[_ImageTarget]:
                 )
 
 
+def _smartart_deferred_message() -> str:
+    return "OfficeCLI has no writable SmartArt alt-text path yet; set this manually in PowerPoint."
+
+
 class AltTextRule(BaseRule):
     meta = RuleMeta(
         rule_id="alt-text-missing",
@@ -282,6 +326,10 @@ class AltTextRule(BaseRule):
                 officecli_path=target.officecli_path,
                 current_value=target.alt_text,
                 plain_impact=self.meta.plain_impact,
+                why_human_needed=(
+                    _smartart_deferred_message() if target.shape_kind == "smartArt" else None
+                )
+                or "",
                 extra={
                     "shape_kind": target.shape_kind,
                     "shape_name": target.shape_name,
@@ -315,6 +363,8 @@ class AltTextRule(BaseRule):
             )
 
     def fix_single_shot(self, finding: Finding, doc: DocumentHandle) -> SingleShotFix | None:
+        if doc.file_format == FileFormat.PPTX and finding.extra.get("shape_kind") == "smartArt":
+            return None
         return SingleShotFix(kind="alt-text", finding=finding, context=dict(finding.extra))
 
 
@@ -349,7 +399,11 @@ class AltTextQualityRule(BaseRule):
                 officecli_path=target.officecli_path,
                 current_value=target.alt_text,
                 plain_impact=self.meta.plain_impact,
-                why_human_needed="Existing alt text is present but likely not descriptive.",
+                why_human_needed=(
+                    _smartart_deferred_message()
+                    if target.shape_kind == "smartArt"
+                    else "Existing alt text is present but likely not descriptive."
+                ),
                 extra={
                     "shape_kind": target.shape_kind,
                     "shape_name": target.shape_name,
@@ -385,6 +439,8 @@ class AltTextQualityRule(BaseRule):
             )
 
     def fix_single_shot(self, finding: Finding, doc: DocumentHandle) -> SingleShotFix | None:
+        if doc.file_format == FileFormat.PPTX and finding.extra.get("shape_kind") == "smartArt":
+            return None
         return SingleShotFix(kind="alt-text", finding=finding, context=dict(finding.extra))
 
 

@@ -12,6 +12,7 @@ from collections.abc import Iterable
 from a11yfix.manifest import FileFormat, Finding, Severity
 from a11yfix.ooxml.docx_paths import iter_table_refs
 from a11yfix.ooxml.namespaces import qn
+from a11yfix.ooxml.pptx_paths import ppt_table_ref
 from a11yfix.rules.base import BaseRule, DocumentHandle, RuleMeta, register_rule
 
 
@@ -53,7 +54,10 @@ class MergedCellsRule(BaseRule):
 
             assert isinstance(doc, PptxHandle)
             for slide_idx, slide_xml in enumerate(doc.slides_xml, start=1):
-                for tbl_idx, tbl in enumerate(slide_xml.iter(qn("a:tbl")), start=1):
+                sp_tree = slide_xml.find(f".//{qn('p:cSld')}/{qn('p:spTree')}")
+                if sp_tree is None:
+                    continue
+                for tbl in slide_xml.iter(qn("a:tbl")):
                     merged = False
                     for tc in tbl.iter(qn("a:tc")):
                         if _span_gt_one(tc.get("gridSpan")) or _span_gt_one(tc.get("rowSpan")):
@@ -63,12 +67,15 @@ class MergedCellsRule(BaseRule):
                             merged = True
                             break
                     if merged:
+                        table_ref = ppt_table_ref(slide_idx=slide_idx, sp_tree=sp_tree, tbl=tbl)
+                        if table_ref is None:
+                            continue
                         yield Finding(
-                            id=f"merged-sld{slide_idx}-tbl{tbl_idx}",
+                            id=f"merged-slide{slide_idx}-tbl{table_ref.shape_id}",
                             rule_id=self.meta.rule_id,
                             severity=self.meta.severity,
                             wcag_sc=self.meta.wcag_sc,
-                            officecli_path=f"/sld[{slide_idx}]/table[{tbl_idx}]",
+                            officecli_path=table_ref.path,
                             current_value="contains merged cells",
                             plain_impact=self.meta.plain_impact,
                             why_human_needed="Splitting may break author intent — defer to human.",

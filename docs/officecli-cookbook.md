@@ -7,8 +7,8 @@ Only the officecli operations a11yfix actually uses. For the full CLI surface se
 1-based, positional. Use `[@id=...]` where stable IDs exist (preferred for multi-op edits since positional indices shift on insert/delete).
 
 ```
-/sld[3]/pic[1]
-/sld[3]/sp[@id=42]
+/slide[3]/picture[@id=41]
+/slide[3]/shape[@id=42]
 /body/p[2]/r[1]
 /body/tbl[1]/tr[1]
 ```
@@ -16,8 +16,8 @@ Only the officecli operations a11yfix actually uses. For the full CLI surface se
 ## Set alt text on a picture
 
 ```bash
-officecli set deck.pptx "/sld[3]/pic[1]" --prop alt="A red square"
-officecli set deck.pptx "/sld[3]/sp[@id=4]" --prop alt="Decorative chevron"
+officecli set deck.pptx "/slide[3]/picture[@id=41]" --prop alt="A red square"
+officecli set deck.pptx "/slide[3]/shape[@id=4]" --prop alt="Decorative chevron"
 ```
 
 `alt` is a first-class property on picture, shape, chart, and group elements.
@@ -26,7 +26,7 @@ officecli set deck.pptx "/sld[3]/sp[@id=4]" --prop alt="Decorative chevron"
 
 ```bash
 # PowerPoint
-officecli set deck.pptx "/sld[2]/table[1]" --prop firstRow=1
+officecli set deck.pptx "/slide[2]/table[@id=9]" --prop firstRow=1
 
 # Word (per-row tblHeader semantic)
 officecli set doc.docx "/body/tbl[1]/tr[1]" --prop header=true
@@ -35,7 +35,7 @@ officecli set doc.docx "/body/tbl[1]/tr[1]" --prop header=true
 ## Set slide title
 
 ```bash
-officecli set deck.pptx "/sld[3]" --prop title="Quarterly Earnings"
+officecli set deck.pptx "/slide[3]" --prop title="Quarterly Earnings"
 ```
 
 ## Set core property
@@ -48,8 +48,8 @@ officecli set doc.docx "/document/settings/themeFontLang" --prop value="en-US"
 ## Reorder shapes for reading order
 
 ```bash
-officecli swap deck.pptx "/sld[3]/sp[@id=4]" "/sld[3]/sp[@id=7]"
-officecli move deck.pptx "/sld[3]/sp[@id=4]" --before "/sld[3]/sp[@id=2]"
+officecli swap deck.pptx "/slide[3]/shape[@id=4]" "/slide[3]/shape[@id=7]"
+officecli move deck.pptx "/slide[3]/shape[@id=4]" --before "/slide[3]/shape[@id=2]"
 ```
 
 ## Mark image as decorative (raw-XML fallback)
@@ -74,8 +74,8 @@ Atomicity: **not atomic**. Successful commands flush even if a later one fails. 
 
 ```json
 [
-  {"command":"set","path":"/sld[3]/pic[1]","props":{"alt":"A red square"}},
-  {"command":"set","path":"/sld[3]/table[1]","props":{"firstRow":"1"}}
+  {"command":"set","path":"/slide[3]/picture[@id=41]","props":{"alt":"A red square"}},
+  {"command":"set","path":"/slide[3]/table[@id=9]","props":{"firstRow":"1"}}
 ]
 ```
 

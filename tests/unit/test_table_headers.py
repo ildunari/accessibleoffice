@@ -1,5 +1,8 @@
 """Unit tests for table_headers rule."""
 
+from pptx.oxml import parse_xml  # type: ignore[import-untyped]
+from pptx.oxml.ns import nsdecls  # type: ignore[import-untyped]
+
 from a11yfix.ooxml.docx_reader import open_docx
 from a11yfix.ooxml.pptx_reader import open_pptx
 from a11yfix.rules.table_headers import TableHeaderRule
@@ -67,3 +70,63 @@ def test_visually_header_ppt_table_is_auto_fixed(tmp_path):
     assert finding.extra["visually_header"] is True
     assert ops is not None
     assert ops[0].props == {"firstRow": "1"}
+
+
+def test_grouped_ppt_table_header_path_includes_group_scope(tmp_path):
+    from pptx import Presentation  # type: ignore[import-untyped]
+
+    path = tmp_path / "grouped_table.pptx"
+    pres = Presentation()
+    slide = pres.slides.add_slide(pres.slide_layouts[6])
+    group = parse_xml(
+        f"""
+        <p:grpSp {nsdecls("p", "a")}>
+          <p:nvGrpSpPr>
+            <p:cNvPr id="99" name="Grouped objects"/>
+            <p:cNvGrpSpPr/>
+            <p:nvPr/>
+          </p:nvGrpSpPr>
+          <p:grpSpPr>
+            <a:xfrm>
+              <a:off x="0" y="0"/><a:ext cx="1" cy="1"/>
+              <a:chOff x="0" y="0"/><a:chExt cx="1" cy="1"/>
+            </a:xfrm>
+          </p:grpSpPr>
+          <p:graphicFrame>
+            <p:nvGraphicFramePr>
+              <p:cNvPr id="100" name="Grouped table"/>
+              <p:cNvGraphicFramePr/>
+              <p:nvPr/>
+            </p:nvGraphicFramePr>
+            <p:xfrm><a:off x="0" y="0"/><a:ext cx="1" cy="1"/></p:xfrm>
+            <a:graphic>
+              <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table">
+                <a:tbl>
+                  <a:tblPr firstRow="0"/>
+                  <a:tblGrid><a:gridCol w="1"/><a:gridCol w="1"/></a:tblGrid>
+                  <a:tr h="1">
+                    <a:tc><a:txBody><a:p><a:r><a:rPr b="true"/><a:t>A</a:t></a:r></a:p></a:txBody></a:tc>
+                    <a:tc><a:txBody><a:p><a:r><a:rPr b="true"/><a:t>B</a:t></a:r></a:p></a:txBody></a:tc>
+                  </a:tr>
+                  <a:tr h="1">
+                    <a:tc><a:txBody><a:p><a:r><a:t>1</a:t></a:r></a:p></a:txBody></a:tc>
+                    <a:tc><a:txBody><a:p><a:r><a:t>2</a:t></a:r></a:p></a:txBody></a:tc>
+                  </a:tr>
+                </a:tbl>
+              </a:graphicData>
+            </a:graphic>
+          </p:graphicFrame>
+        </p:grpSp>
+        """
+    )
+    slide._element.spTree.append(group)
+    pres.save(path)
+
+    doc = open_pptx(path)
+    finding = next(iter(TableHeaderRule().detect(doc)))
+    ops = TableHeaderRule().fix_deterministic(finding, doc)
+
+    assert finding.officecli_path == "/slide[1]/group[@id=99]/table[@id=100]"
+    assert finding.extra["visually_header"] is True
+    assert ops is not None
+    assert ops[0].path == finding.officecli_path

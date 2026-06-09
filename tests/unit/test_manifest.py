@@ -3,11 +3,11 @@
 import json
 
 from a11yfix.manifest import (
+    SCHEMA_VERSION,
     AppliedFix,
     FileFormat,
     Finding,
     Manifest,
-    SCHEMA_VERSION,
     Severity,
     ValidationResult,
     validate_manifest_dict,
@@ -29,7 +29,7 @@ def test_round_trip_with_finding():
         rule_id="alt-text-missing",
         severity=Severity.ERROR,
         wcag_sc=["1.1.1"],
-        officecli_path="/sld[1]/pic[1]",
+        officecli_path="/slide[1]/picture[@id=1]",
     )
     m = Manifest(
         file_path="/tmp/x.pptx",
@@ -59,7 +59,7 @@ def test_applied_fix_json():
     af = AppliedFix(
         finding_id="f-1",
         rule_id="alt-text-missing",
-        officecli_path="/sld[1]/pic[1]",
+        officecli_path="/slide[1]/picture[@id=1]",
         stage=2,
         before="",
         after="{'alt': 'hi'}",

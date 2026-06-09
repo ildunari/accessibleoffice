@@ -21,7 +21,9 @@ from xml.etree import ElementTree as ET
 
 from a11yfix.manifest import FileFormat, Finding, Severity
 from a11yfix.ooxml.namespaces import qn
+from a11yfix.ooxml.pptx_paths import ppt_target_ref
 from a11yfix.ooxml.theme_colors import DEFAULT_SCHEME, RGB, ThemeColorResolver, contrast_ratio
+from a11yfix.ooxml.toggles import attr_bool_enabled
 from a11yfix.rules.base import BaseRule, DocumentHandle, RuleMeta, register_rule
 
 _A_NS = "http://schemas.openxmlformats.org/drawingml/2006/main"
@@ -182,42 +184,58 @@ class ColorContrastRule(BaseRule):
         resolver = ThemeColorResolver(scheme=_theme_scheme_from_pptx(doc.path))
         for slide_idx, slide_xml in enumerate(doc.slides_xml, start=1):
             slide_bg = _slide_background(slide_xml, resolver)
-            for sp_idx, sp in enumerate(slide_xml.iter(qn("p:sp")), start=1):
+            sp_tree = slide_xml.find(f".//{qn('p:cSld')}/{qn('p:spTree')}")
+            if sp_tree is None:
+                continue
+            for sp in slide_xml.iter(qn("p:sp")):
+                sp_ref = ppt_target_ref(
+                    slide_idx=slide_idx,
+                    sp_tree=sp_tree,
+                    element=sp,
+                    element_name="shape",
+                    cnv_path=f"{qn('p:nvSpPr')}/{qn('p:cNvPr')}",
+                )
+                if sp_ref is None:
+                    continue
                 bg = _shape_background(sp, resolver) or slide_bg
                 if bg is None:
                     continue
-                for r_idx, r in enumerate(sp.iter(qn("a:r")), start=1):
-                    rPr = r.find(qn("a:rPr"))
-                    fg = _run_color(r, sp, resolver)
-                    if fg is None:
-                        continue
-                    ratio = contrast_ratio(fg, bg)
-                    # Determine large-text threshold (≥18pt or ≥14pt bold)
-                    sz = rPr.get("sz") if rPr is not None else None  # in hundredths of a point
-                    sz_pt = int(sz) / 100 if sz else 12.0
-                    is_bold = rPr is not None and rPr.get("b") == "1"
-                    is_large = sz_pt >= 18 or (sz_pt >= 14 and is_bold)
-                    threshold = 3.0 if is_large else 4.5
-                    if ratio >= threshold:
-                        continue
-                    yield Finding(
-                        id=f"contrast-sld{slide_idx}-sp{sp_idx}-r{r_idx}",
-                        rule_id=self.meta.rule_id,
-                        severity=self.meta.severity,
-                        wcag_sc=self.meta.wcag_sc,
-                        officecli_path=f"/sld[{slide_idx}]/sp[{sp_idx}]/p[1]/r[{r_idx}]",
-                        current_value=f"{fg.hex} on {bg.hex} = {ratio:.2f}:1",
-                        plain_impact=self.meta.plain_impact,
-                        why_human_needed=(
-                            "Auto-darkening would change the design system; defer to human."
-                        ),
-                        extra={
-                            "fg_hex": fg.hex,
-                            "bg_hex": bg.hex,
-                            "ratio": round(ratio, 2),
-                            "threshold": threshold,
-                        },
-                    )
+                for p_idx, para in enumerate(sp.iter(qn("a:p")), start=1):
+                    for r_idx, r in enumerate(para.findall(qn("a:r")), start=1):
+                        rPr = r.find(qn("a:rPr"))
+                        fg = _run_color(r, sp, resolver)
+                        if fg is None:
+                            continue
+                        ratio = contrast_ratio(fg, bg)
+                        # Determine large-text threshold (>=18pt or >=14pt bold)
+                        sz = rPr.get("sz") if rPr is not None else None
+                        sz_pt = int(sz) / 100 if sz else 12.0
+                        is_bold = rPr is not None and attr_bool_enabled(rPr.get("b"))
+                        is_large = sz_pt >= 18 or (sz_pt >= 14 and is_bold)
+                        threshold = 3.0 if is_large else 4.5
+                        if ratio >= threshold:
+                            continue
+                        yield Finding(
+                            id=(
+                                f"contrast-slide{slide_idx}-shape{sp_ref.shape_id}"
+                                f"-p{p_idx}-r{r_idx}"
+                            ),
+                            rule_id=self.meta.rule_id,
+                            severity=self.meta.severity,
+                            wcag_sc=self.meta.wcag_sc,
+                            officecli_path=f"{sp_ref.path}/p[{p_idx}]/r[{r_idx}]",
+                            current_value=f"{fg.hex} on {bg.hex} = {ratio:.2f}:1",
+                            plain_impact=self.meta.plain_impact,
+                            why_human_needed=(
+                                "Auto-darkening would change the design system; defer to human."
+                            ),
+                            extra={
+                                "fg_hex": fg.hex,
+                                "bg_hex": bg.hex,
+                                "ratio": round(ratio, 2),
+                                "threshold": threshold,
+                            },
+                        )
 
 
 register_rule(ColorContrastRule())

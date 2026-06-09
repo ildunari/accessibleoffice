@@ -13,6 +13,7 @@ from typing import Any
 from lxml import etree
 
 from a11yfix.manifest import FileFormat, Finding
+from a11yfix.ooxml.docx_paths import iter_paragraph_refs, iter_run_refs
 from a11yfix.ooxml.namespaces import qn
 from a11yfix.rules.base import DocumentHandle
 
@@ -53,9 +54,12 @@ def _extract_docx(doc: DocumentHandle, finding: Finding) -> tuple[bytes, str] | 
     if not isinstance(doc, DocxHandle):
         return None
     drawings: list[Any] = []
+    run_path = str(finding.extra.get("run_path") or "")
+    if run_path:
+        drawings = _docx_drawings_for_run_path(doc, run_path)
     para_idx = int(finding.extra.get("paragraph") or 0)
     run_idx = int(finding.extra.get("run") or 0)
-    if run_idx > 0:
+    if not drawings and run_idx > 0:
         paras = doc.body.findall(qn("w:p"))
         if 0 < para_idx <= len(paras):
             runs = paras[para_idx - 1].findall(qn("w:r"))
@@ -91,6 +95,18 @@ def _extract_docx(doc: DocumentHandle, finding: Finding) -> tuple[bytes, str] | 
     if not target:
         return None
     return _read_zip_member(doc.path, "word", target)
+
+
+def _docx_drawings_for_run_path(doc: DocumentHandle, run_path: str) -> list[Any]:
+    from a11yfix.ooxml.docx_reader import DocxHandle
+
+    if not isinstance(doc, DocxHandle):
+        return []
+    for para_ref in iter_paragraph_refs(doc.body):
+        for run_ref in iter_run_refs(para_ref.element, para_ref.path):
+            if run_ref.path == run_path:
+                return list(run_ref.element.findall(qn("w:drawing")))
+    return []
 
 
 def _docx_drawings_for_pic_id(doc: DocumentHandle, pic_id: str) -> list[Any]:

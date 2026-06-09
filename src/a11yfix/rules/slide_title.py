@@ -84,7 +84,7 @@ class SlideTitleRule(BaseRule):
                 rule_id=self.meta.rule_id,
                 severity=self.meta.severity,
                 wcag_sc=self.meta.wcag_sc,
-                officecli_path=f"/sld[{idx}]",
+                officecli_path=f"/slide[{idx}]",
                 current_value="",
                 plain_impact=self.meta.plain_impact,
                 why_human_needed=why,
