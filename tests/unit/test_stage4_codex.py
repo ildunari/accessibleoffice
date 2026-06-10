@@ -49,13 +49,15 @@ def test_available_tracks_codex_on_path(tmp_path, monkeypatch):
     assert CodexLauncher().available() is True
 
 
-def test_sandbox_and_approval_flags(tmp_path, monkeypatch):
+def test_sandbox_flags(tmp_path, monkeypatch):
     log = _fake_codex(tmp_path, monkeypatch)
     monkeypatch.setattr("a11yfix.stage4_codex._error_count", lambda f: 0)
     assert CodexLauncher().launch(_plan(tmp_path)) == 0
     args = log.read_text()
     assert "-s workspace-write" in args
-    assert "-a never" in args
+    # codex exec is non-interactive by design — it has no -a/--ask-for-approval
+    # flag, and passing one makes clap exit 2 before the session starts.
+    assert "-a" not in args.split()
     assert f"-C {tmp_path}" in args
     assert "resume" not in args  # no follow-up when verification passes
 
@@ -89,7 +91,9 @@ def test_regression_restores_backup(tmp_path, monkeypatch):
     plan = _plan(tmp_path)
     assert CodexLauncher().launch(plan) == 7
     assert plan.file.read_bytes() == b"orig"
-    assert "resume --last" in log.read_text()
+    args = log.read_text()
+    assert "resume --last" in args
+    assert "-a" not in args.split()  # codex exec resume has no approval flag either
 
 
 def test_follow_up_recovers(tmp_path, monkeypatch):

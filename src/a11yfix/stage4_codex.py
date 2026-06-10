@@ -64,8 +64,7 @@ class CodexLauncher:
             "workspace-write",
             "-C",
             str(plan.file.parent),
-            "-a",
-            "never",
+            # codex exec is non-interactive by design — it has no approval flag
             "-m",
             model,
             prompt,
@@ -100,8 +99,7 @@ class CodexLauncher:
                         "workspace-write",
                         "-C",
                         str(plan.file.parent),
-                        "-a",
-                        "never",
+                        # codex exec is non-interactive by design — it has no approval flag
                         f"Verification failed: error findings went {baseline} -> {after}. "
                         "Re-check your officecli ops and fix the regression.",
                     ],
