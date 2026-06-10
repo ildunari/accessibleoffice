@@ -15,6 +15,7 @@ import contextlib
 import fcntl
 import json
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,22 @@ _PRICE_PER_M_OUTPUT = {
 }
 _DEFAULT_PRICE_INPUT = 3.0
 _DEFAULT_PRICE_OUTPUT = 15.0
+
+# One warning per process when the ledger degrades to in-memory no-op
+# (e.g. read-only A11YFIX_STATE_DIR) — not one per metered call.
+_warned_unwritable = False
+
+
+def _warn_unwritable_once(path: Path, exc: OSError) -> None:
+    global _warned_unwritable
+    if _warned_unwritable:
+        return
+    _warned_unwritable = True
+    print(
+        f"[cost-meter] state dir not writable ({path.parent}: {exc}); "
+        "cost metering disabled for this process",
+        file=sys.stderr,
+    )
 
 
 def estimate_cost_usd(
@@ -121,22 +138,35 @@ class CostMeter:
 
     @contextlib.contextmanager
     def _locked(self):
-        """Yield (ledger, write_fn). On exit the file lock is released."""
+        """Yield (ledger, write_fn). On exit the file lock is released.
+
+        If the state dir isn't writable, degrades to the same in-memory
+        no-op path as `self.path is None` instead of raising — a metering
+        failure must never sink a model call that already succeeded.
+        """
         if self.path is None:
             # No state dir: in-memory only, no locking.
             ledger = CostLedger()
             yield ledger, lambda new: None
             return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        # Use a sidecar lockfile so the JSON itself is never half-locked.
-        lock_path = self.path.with_suffix(".lock")
-        with lock_path.open("a+") as lock_f:
+        lock_f = None
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            # Use a sidecar lockfile so the JSON itself is never half-locked.
+            lock_f = self.path.with_suffix(".lock").open("a+")
             fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
-            try:
-                ledger = self._read()
-                yield ledger, self._write
-            finally:
-                fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
+        except OSError as exc:
+            if lock_f is not None:
+                lock_f.close()
+            _warn_unwritable_once(self.path, exc)
+            yield CostLedger(), lambda new: None
+            return
+        try:
+            ledger = self._read()
+            yield ledger, self._write
+        finally:
+            fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
+            lock_f.close()
 
     # ------- public API -------
 

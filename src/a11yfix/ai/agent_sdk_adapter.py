@@ -52,6 +52,23 @@ class RateLimitedError(Exception):
     """All retries exhausted on a rate-limited call."""
 
 
+def _usage_from_tokens(raw: Any) -> CallUsage | None:
+    """Token-count fallback when the SDK doesn't report authoritative cost.
+
+    Malformed payloads yield None (the call goes unmetered) rather than an
+    exception that would defer a finding whose model call already succeeded.
+    """
+    try:
+        return CallUsage(
+            input_tokens=int(raw.get("input_tokens") or 0),
+            output_tokens=int(raw.get("output_tokens") or 0),
+            cache_read_tokens=int(raw.get("cache_read_input_tokens") or 0),
+            cache_creation_tokens=int(raw.get("cache_creation_input_tokens") or 0),
+        )
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
 class ClaudeAgentSDKAdapter:
     """Single-shot AI adapter backed by the Claude Code OAuth session."""
 
@@ -122,10 +139,7 @@ class ClaudeAgentSDKAdapter:
                     if msg.total_cost_usd is not None:
                         usage = CallUsage(cost_usd=msg.total_cost_usd)
                     elif msg.usage:
-                        usage = CallUsage(
-                            input_tokens=int(msg.usage.get("input_tokens") or 0),
-                            output_tokens=int(msg.usage.get("output_tokens") or 0),
-                        )
+                        usage = _usage_from_tokens(msg.usage)
             if rate_limited and not chunks:
                 # Known limitation: a rate-limited stream usually ends without
                 # a ResultMessage, so the partial attempt's cost is never

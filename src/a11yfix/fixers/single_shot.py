@@ -88,6 +88,8 @@ def _record_usage(res) -> None:
             model=res.model,
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
+            cache_read_tokens=usage.cache_read_tokens,
+            cache_creation_tokens=usage.cache_creation_tokens,
         )
 
 

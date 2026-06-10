@@ -130,11 +130,20 @@ class ClaudeAdapter:
 
 
 def _usage_from_message(msg: Any) -> CallUsage | None:
-    """Token counts from the Anthropic response; the pipeline estimates USD."""
+    """Token counts from the Anthropic response; the pipeline estimates USD.
+
+    Malformed payloads yield None (the call goes unmetered) rather than an
+    exception that would defer a finding whose model call already succeeded.
+    """
     usage = getattr(msg, "usage", None)
     if usage is None:
         return None
-    return CallUsage(
-        input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
-        output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
-    )
+    try:
+        return CallUsage(
+            input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+            output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+            cache_read_tokens=int(getattr(usage, "cache_read_input_tokens", 0) or 0),
+            cache_creation_tokens=int(getattr(usage, "cache_creation_input_tokens", 0) or 0),
+        )
+    except (TypeError, ValueError):
+        return None
