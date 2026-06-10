@@ -638,7 +638,9 @@ def _resolve_batch_id(batch_id: str) -> Path:
     show_default=True,
     help=(
         "AI backend for stage-3 fixes. claude = Claude Code OAuth (no API key). "
-        "claude-api/anthropic = Anthropic SDK (ANTHROPIC_API_KEY)."
+        "claude-api/anthropic = Anthropic SDK (ANTHROPIC_API_KEY). "
+        "openai/openrouter = direct chat-completions API "
+        "(OPENAI_API_KEY / OPENROUTER_API_KEY)."
     ),
 )
 @click.option(

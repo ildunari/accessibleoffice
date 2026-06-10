@@ -8,6 +8,10 @@ def test_initial_backends_registered():
     assert {"claude", "claude-api", "anthropic"} <= set(backend_names())
 
 
+def test_direct_llm_backends_registered():
+    assert {"openai", "openrouter"} <= set(backend_names())
+
+
 def test_unknown_backend_lists_valid():
     with pytest.raises(AdapterUnavailable) as exc:
         create_adapter("nope")

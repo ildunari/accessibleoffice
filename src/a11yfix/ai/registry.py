@@ -29,10 +29,24 @@ def _claude_api(model: str | None) -> VLMAdapter:
     return ClaudeAdapter(**({"model": model} if model else {}))
 
 
+def _openai(model: str | None) -> VLMAdapter:
+    from a11yfix.ai.direct_llm_adapter import DirectLLMAdapter
+
+    return DirectLLMAdapter(provider="openai", model=model)
+
+
+def _openrouter(model: str | None) -> VLMAdapter:
+    from a11yfix.ai.direct_llm_adapter import DirectLLMAdapter
+
+    return DirectLLMAdapter(provider="openrouter", model=model)
+
+
 _BACKENDS: dict[str, Callable[[str | None], VLMAdapter]] = {
     "claude": _claude,
     "claude-api": _claude_api,
     "anthropic": _claude_api,  # alias: "direct Anthropic API"
+    "openai": _openai,
+    "openrouter": _openrouter,
 }
 
 
