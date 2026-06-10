@@ -50,7 +50,9 @@ def test_describe_image(codex, monkeypatch):
     assert res.usage.cost_usd is None  # codex exec reports tokens, not dollars
     cmd = cmds[0]
     assert cmd[:4] == ["codex", "exec", "--json", "--ephemeral"]
-    assert "-i" in cmd and cmd[cmd.index("-i") + 1]  # image path attached
+    # =-attached form: a bare -i is multi-value greedy and would swallow the prompt
+    image_args = [a for a in cmd if a.startswith("--image=")]
+    assert len(image_args) == 1 and image_args[0].endswith(".png")
     assert "-s" in cmd and "read-only" in cmd
     assert "\n\n" in cmd[-1]  # combined system+user prompt is the last arg
 
@@ -59,7 +61,7 @@ def test_no_image_flag_for_text_calls(codex, monkeypatch):
     cmds: list = []
     _fake_run(monkeypatch, CODEX_OK, capture=cmds)
     codex.suggest_link_text(url="https://x.test/a", surrounding_text="see docs")
-    assert "-i" not in cmds[0]
+    assert not any(a == "-i" or a.startswith("--image") for a in cmds[0])
 
 
 def test_turn_failed_raises(codex, monkeypatch):

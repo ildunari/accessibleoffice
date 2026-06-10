@@ -51,7 +51,9 @@ class CodexAdapter:
             "--color", "never", "-s", "read-only", "-m", self._model,
         ]
         if image_path is not None:
-            cmd += ["-i", str(image_path)]
+            # --image is multi-value greedy in clap; =-form keeps it to one
+            # value so the positional prompt survives
+            cmd.append(f"--image={image_path}")
         cmd.append(f"{system}\n\n{user}")
         stdout = run_cli(cmd)
         text, usage = "", CallUsage()
