@@ -47,6 +47,12 @@ def _pi(model: str | None) -> VLMAdapter:
     return PiAdapter(model=model)
 
 
+def _opencode(model: str | None) -> VLMAdapter:
+    from a11yfix.ai.opencode_adapter import OpenCodeAdapter
+
+    return OpenCodeAdapter(model=model)
+
+
 _BACKENDS: dict[str, Callable[[str | None], VLMAdapter]] = {
     "claude": _claude,
     "claude-api": _claude_api,
@@ -54,6 +60,7 @@ _BACKENDS: dict[str, Callable[[str | None], VLMAdapter]] = {
     "openai": _openai,
     "openrouter": _openrouter,
     "pi": _pi,
+    "opencode": _opencode,
 }
 
 

@@ -31,3 +31,7 @@ def test_unavailable_backend_raises(monkeypatch):
 
 def test_pi_backend_registered():
     assert "pi" in backend_names()
+
+
+def test_opencode_backend_registered():
+    assert "opencode" in backend_names()
