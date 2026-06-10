@@ -11,6 +11,7 @@ from a11yfix.ai.adapter import (
     LinkTextResult,
     SlideTitleResult,
 )
+from a11yfix.ai.confidence import confidence_from_text
 from a11yfix.ai.prompts import (
     ALT_TEXT_SYSTEM,
     LINK_TEXT_SYSTEM,
@@ -36,14 +37,7 @@ class ClaudeAdapter:
         self._model = model
 
     def _confidence_from_text(self, text: str, max_chars: int) -> float:
-        if not text:
-            return 0.0
-        if "UNCLEAR" in text or "DECORATIVE" in text:
-            return 0.95  # explicit signal — actually high confidence in saying "I don't know"
-        # If the model returned overly long text, low confidence.
-        if len(text) > max_chars * 1.5:
-            return 0.4
-        return 0.85
+        return confidence_from_text(text, max_chars)
 
     # --- alt text ---
     def describe_image(self, image_bytes: bytes, *, max_chars: int, context: str) -> AltTextResult:

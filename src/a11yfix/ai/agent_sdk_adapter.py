@@ -30,6 +30,7 @@ from a11yfix.ai.adapter import (
     LinkTextResult,
     SlideTitleResult,
 )
+from a11yfix.ai.confidence import confidence_from_text
 from a11yfix.ai.prompts import (
     ALT_TEXT_SYSTEM,
     LINK_TEXT_SYSTEM,
@@ -66,13 +67,7 @@ class ClaudeAgentSDKAdapter:
         self._model = model
 
     def _confidence_from_text(self, text: str, max_chars: int) -> float:
-        if not text:
-            return 0.0
-        if "UNCLEAR" in text or "DECORATIVE" in text:
-            return 0.95
-        if len(text) > max_chars * 1.5:
-            return 0.4
-        return 0.85
+        return confidence_from_text(text, max_chars)
 
     # -------- core query with retries + cost recording --------
 
