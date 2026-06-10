@@ -79,6 +79,17 @@ def _detect_findings(doc, only_rules: set[str] | None, skip_rules: set[str]) -> 
     return findings
 
 
+def detect_findings(file: Path) -> list[Finding]:
+    """Run stage-1 detection on a document path with all rules enabled.
+
+    Public entry point for out-of-band detection runs (e.g. the stage-4
+    Codex launcher's post-session verification gate).
+    """
+    fmt = _detect_format(file)
+    doc = _open_doc(file, fmt)
+    return _detect_findings(doc, None, set())
+
+
 @dataclass
 class FileResult:
     """Outcome of a single-file run, used by both single-file and batch paths."""
