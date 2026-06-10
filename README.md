@@ -63,6 +63,13 @@ accessibleoffice deck.pptx --mode full --dry-run   # show what 'full' would do w
 
 What `auto` actually fixes: only the **deterministic** issues — document title, table header rows, and (with `--default-lang`) the document language. The bulk of real-world findings on content-heavy decks — alt text, slide titles, link text — need a model and are applied by `--mode full` (stage 3); contrast and reading-order are human-judgment calls that are never auto-applied. The report ends with a `What's left:` breakdown (AI-fixable / deterministic / manual) so you know whether `auto` actually changed anything or you need `full` — fixability is classified per finding, not per rule, so e.g. an off-canvas slide title is honestly listed under manual review rather than promised to `full`, and a leftover document-language finding points you at `--default-lang`. If a run applies no fixes — `auto` with nothing deterministic to do, or `full` when the AI stage produces zero operations — it leaves the file byte-for-byte unchanged.
 
+The AI stages are backend-pluggable. `--vlm` picks the stage-3 backend, `--agent` picks the stage-4 one:
+
+- `--vlm claude` (default) drives Claude Code with its OAuth login — no API key needed. `claude-api` / `anthropic` use the Anthropic SDK (`ANTHROPIC_API_KEY`); `openai` / `openrouter` hit the chat-completions API directly (`OPENAI_API_KEY` / `OPENROUTER_API_KEY`) — the cheapest path to any model, including everything OpenRouter proxies. `pi`, `opencode`, and `codex` shell out to those agent CLIs and reuse whatever auth they're already logged in with (a Claude Max, ChatGPT, or Copilot subscription works); the binary must be on PATH. `--vlm-model` overrides any backend's default model.
+- `--agent claude` (default) runs stage-4 remediation (`--remediate` / `--mode full`) in Claude Code with hook-based safety rails; `--agent codex` runs it in OpenAI Codex inside a sandboxed session with a verify-restore gate.
+
+A missing backend — binary not on PATH, key not set — never fails the run: stages 1–2 still apply and the report lists the file as needing the AI stages (batch runs mark it `partial`). The `pi`, `opencode`, and `codex` VLM backends are experimental until validated against the live binaries.
+
 Granular flags still work for advanced users (`--report-only`, `--auto-only`, `--remediate`, `--rules ...`, `--skip-rules ...`, `--strict`, `--output ...`). Run `accessibleoffice --help` for the full list.
 
 ## Pipeline
