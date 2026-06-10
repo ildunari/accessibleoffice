@@ -29,12 +29,23 @@ from pathlib import Path
 
 
 def build_deck(path: Path) -> None:
-    from PIL import Image
+    from PIL import Image, ImageDraw
     from pptx import Presentation
     from pptx.util import Inches
 
     img = path.parent / "chart.png"
-    Image.new("RGB", (320, 200), (200, 40, 40)).save(img)
+    # A describable image, not a flat color: a plain rectangle gets judged
+    # DECORATIVE by the model (correctly!) and the fix defers, failing gate (a).
+    chart = Image.new("RGB", (320, 200), "white")
+    draw = ImageDraw.Draw(chart)
+    bars = [("Q1", 60, "#4472c4"), ("Q2", 95, "#ed7d31"), ("Q3", 140, "#70ad47")]
+    for i, (label, h, color) in enumerate(bars):
+        x = 40 + i * 90
+        draw.rectangle([x, 170 - h, x + 60, 170], fill=color, outline="black")
+        draw.text((x + 20, 175), label, fill="black")
+    draw.line([30, 170, 300, 170], fill="black", width=2)
+    draw.text((90, 8), "Quarterly revenue", fill="black")
+    chart.save(img)
     prs = Presentation()
     slide = prs.slides.add_slide(prs.slide_layouts[6])  # blank
     slide.shapes.add_picture(str(img), Inches(1), Inches(1))
