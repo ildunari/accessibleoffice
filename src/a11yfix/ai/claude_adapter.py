@@ -8,6 +8,7 @@ from typing import Any
 
 from a11yfix.ai.adapter import (
     AltTextResult,
+    CallUsage,
     LinkTextResult,
     SlideTitleResult,
 )
@@ -76,6 +77,7 @@ class ClaudeAdapter:
             text=text,
             confidence=self._confidence_from_text(text, max_chars),
             model=self._model,
+            usage=_usage_from_message(msg),
         )
 
     def suggest_link_text(self, url: str, surrounding_text: str) -> LinkTextResult:
@@ -95,6 +97,7 @@ class ClaudeAdapter:
             text=text,
             confidence=self._confidence_from_text(text, max_chars=64),
             model=self._model,
+            usage=_usage_from_message(msg),
         )
 
     def suggest_slide_title(self, slide_text: str, slide_layout: str) -> SlideTitleResult:
@@ -114,6 +117,7 @@ class ClaudeAdapter:
             text=text,
             confidence=self._confidence_from_text(text, max_chars=80),
             model=self._model,
+            usage=_usage_from_message(msg),
         )
 
     @staticmethod
@@ -123,3 +127,14 @@ class ClaudeAdapter:
             if getattr(block, "type", None) == "text":
                 return getattr(block, "text", "") or ""
         return ""
+
+
+def _usage_from_message(msg: Any) -> CallUsage | None:
+    """Token counts from the Anthropic response; the pipeline estimates USD."""
+    usage = getattr(msg, "usage", None)
+    if usage is None:
+        return None
+    return CallUsage(
+        input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+        output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+    )

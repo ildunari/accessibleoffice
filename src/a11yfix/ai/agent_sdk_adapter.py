@@ -7,8 +7,8 @@ Vision: `query()` is text-only, but Claude Code can read files via its Read
 tool, so we write image bytes to a temp PNG and reference it in the prompt.
 
 Resilience:
-  - Records `ResultMessage.total_cost_usd` into the batch CostMeter (if env
-    var `A11YFIX_STATE_DIR` is set).
+  - Reports `ResultMessage.total_cost_usd` (or token counts) as `CallUsage`
+    on each result; the pipeline records it into the batch CostMeter.
   - Detects `RateLimitEvent` mid-stream and applies exponential backoff
     (0.5s/1s/2s/4s, max 4 retries) before re-issuing.
   - Catches CLIConnectionError / ProcessError and treats them as transient.
@@ -27,6 +27,7 @@ from typing import Any
 
 from a11yfix.ai.adapter import (
     AltTextResult,
+    CallUsage,
     LinkTextResult,
     SlideTitleResult,
 )
@@ -69,7 +70,7 @@ class ClaudeAgentSDKAdapter:
     def _confidence_from_text(self, text: str, max_chars: int) -> float:
         return confidence_from_text(text, max_chars)
 
-    # -------- core query with retries + cost recording --------
+    # -------- core query with retries + usage reporting --------
 
     def _run(
         self,
@@ -77,10 +78,12 @@ class ClaudeAgentSDKAdapter:
         user: str,
         *,
         allowed_tools: list[str] | None = None,
-    ) -> str:
+    ) -> tuple[str, CallUsage | None]:
         """Run one query with bounded backoff on rate-limit events.
 
-        Records cost into the batch ledger via env-var configured CostMeter.
+        Returns the response text plus a `CallUsage` reporting the SDK's
+        authoritative cost (or token counts as a fallback). The pipeline —
+        not this adapter — records it into the batch cost ledger.
         """
         from claude_agent_sdk import (
             AssistantMessage,
@@ -95,11 +98,7 @@ class ClaudeAgentSDKAdapter:
             query,
         )
 
-        from a11yfix.cost_meter import CostMeter
-
-        meter = CostMeter.from_env()
-
-        async def _go() -> str:
+        async def _go() -> tuple[str, CallUsage | None]:
             opts = ClaudeAgentOptions(
                 model=self._model,
                 system_prompt=system,
@@ -108,6 +107,7 @@ class ClaudeAgentSDKAdapter:
             )
             chunks: list[str] = []
             rate_limited = False
+            usage: CallUsage | None = None
             async for msg in query(prompt=user, options=opts):
                 if isinstance(msg, RateLimitEvent):
                     rate_limited = True
@@ -117,26 +117,21 @@ class ClaudeAgentSDKAdapter:
                         if isinstance(block, TextBlock):
                             chunks.append(block.text)
                 elif isinstance(msg, ResultMessage):
-                    # Prefer the SDK's authoritative cost; fall back to our
-                    # estimator if it isn't surfaced.
+                    # Prefer the SDK's authoritative cost; fall back to token
+                    # counts so the pipeline can estimate.
                     if msg.total_cost_usd is not None:
-                        meter.record_usd(model=self._model, usd=msg.total_cost_usd)
+                        usage = CallUsage(cost_usd=msg.total_cost_usd)
                     elif msg.usage:
-                        meter.record(
-                            model=self._model,
+                        usage = CallUsage(
                             input_tokens=int(msg.usage.get("input_tokens") or 0),
                             output_tokens=int(msg.usage.get("output_tokens") or 0),
-                            cache_read_tokens=int(msg.usage.get("cache_read_input_tokens") or 0),
-                            cache_creation_tokens=int(
-                                msg.usage.get("cache_creation_input_tokens") or 0
-                            ),
                         )
             if rate_limited and not chunks:
                 # Known limitation: a rate-limited stream usually ends without
                 # a ResultMessage, so the partial attempt's cost is never
                 # surfaced by the SDK and goes unrecorded in the ledger.
                 raise RateLimitedError("rate-limited mid-stream with no text")
-            return "".join(chunks).strip()
+            return "".join(chunks).strip(), usage
 
         last_exc: Exception | None = None
         for attempt in range(MAX_RETRIES):
@@ -181,7 +176,7 @@ class ClaudeAgentSDKAdapter:
                 "the single word UNCLEAR."
             )
             try:
-                text = self._run(ALT_TEXT_SYSTEM, user, allowed_tools=["Read"])
+                text, usage = self._run(ALT_TEXT_SYSTEM, user, allowed_tools=["Read"])
             except Exception as exc:
                 if _looks_like_sdk_payload_error(exc):
                     raise RuntimeError(
@@ -205,28 +200,33 @@ class ClaudeAgentSDKAdapter:
             text=text,
             confidence=self._confidence_from_text(text, max_chars),
             model=self._model,
+            usage=usage,
         )
 
     def suggest_link_text(self, url: str, surrounding_text: str) -> LinkTextResult:
-        text = self._run(
+        text, usage = self._run(
             LINK_TEXT_SYSTEM,
             link_text_user(url=url, surrounding_text=surrounding_text),
-        ).strip('"').strip("'")
+        )
+        text = text.strip('"').strip("'")
         return LinkTextResult(
             text=text,
             confidence=self._confidence_from_text(text, max_chars=64),
             model=self._model,
+            usage=usage,
         )
 
     def suggest_slide_title(self, slide_text: str, slide_layout: str) -> SlideTitleResult:
-        text = self._run(
+        text, usage = self._run(
             SLIDE_TITLE_SYSTEM,
             slide_title_user(slide_text=slide_text, slide_layout=slide_layout),
-        ).strip('"').strip("'")
+        )
+        text = text.strip('"').strip("'")
         return SlideTitleResult(
             text=text,
             confidence=self._confidence_from_text(text, max_chars=80),
             model=self._model,
+            usage=usage,
         )
 
 
