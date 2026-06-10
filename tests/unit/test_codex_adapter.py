@@ -44,7 +44,7 @@ def test_describe_image(codex, monkeypatch):
     _fake_run(monkeypatch, CODEX_OK, capture=cmds)
     res = codex.describe_image(PNG_1PX, max_chars=125, context="Shape: chart1")
     assert res.text == "A bar chart of Q3 revenue"
-    assert res.usage.input_tokens == 27000
+    assert res.usage.input_tokens == 25000  # 27000 minus the 2000 cached subset
     assert res.usage.output_tokens == 12
     assert res.usage.cache_read_tokens == 2000
     assert res.usage.cost_usd is None  # codex exec reports tokens, not dollars

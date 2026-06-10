@@ -124,10 +124,13 @@ def _usage_from_turn(ev: dict) -> CallUsage:
     """Defensive: junk usage payloads cost only the metering, never the fix."""
     u = ev.get("usage") or {}
     try:
+        # cached_input_tokens is a subset of input_tokens — split so the
+        # estimator prices the cached portion at 10%, not 110%.
+        cached = int(u.get("cached_input_tokens") or 0)
         return CallUsage(
-            input_tokens=int(u.get("input_tokens") or 0),
+            input_tokens=max(0, int(u.get("input_tokens") or 0) - cached),
             output_tokens=int(u.get("output_tokens") or 0),
-            cache_read_tokens=int(u.get("cached_input_tokens") or 0),
+            cache_read_tokens=cached,
             cost_usd=None,  # codex exec reports tokens only; estimator prices them
         )
     except (TypeError, ValueError, AttributeError):
