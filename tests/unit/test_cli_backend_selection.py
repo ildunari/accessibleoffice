@@ -23,3 +23,10 @@ def test_unknown_vlm_rejected():
     result = runner.invoke(main, ["nofile.pptx", "--vlm", "bogus"])
     assert result.exit_code == 2  # click.Choice rejection (fail gate: unknown backend)
     assert "Invalid value for '--vlm'" in result.output
+
+
+def test_agent_option_in_help():
+    runner = CliRunner()
+    result = runner.invoke(main, ["--help"])
+    out = " ".join(result.output.split())
+    assert "--agent [claude|codex]" in out

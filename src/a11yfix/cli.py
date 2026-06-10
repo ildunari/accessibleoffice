@@ -114,6 +114,39 @@ class FileResult:
         return len(self.manifest.residual_findings) if self.manifest else 0
 
 
+def _launch_stage4(
+    agent: str,
+    file: Path,
+    manifest: Manifest,
+    manifest_path: Path | None,
+    remediate_model: str,
+    dry_run: bool,
+) -> int:
+    """Build the stage-4 plan and run it on the selected agentic backend.
+
+    Preserves the historical contract of ``stage4.launch``: ``--dry-run``
+    prints the plan even when the backend CLI is missing, and a missing CLI
+    skips stage 4 with exit code 4.
+    """
+    from a11yfix.stage4 import build_launch_plan, get_launcher
+
+    plan = build_launch_plan(
+        file,
+        manifest,
+        manifest_path=manifest_path,
+        model=remediate_model,
+    )
+    launcher = get_launcher(agent)
+    if not dry_run and not launcher.available():
+        click.echo(
+            f"[error] {launcher.name} CLI not found in PATH — skipping stage 4; "
+            f"manifest is at: {manifest_path}",
+            err=True,
+        )
+        return 4
+    return launcher.launch(plan, dry_run=dry_run)
+
+
 def _process_one_file(
     file: Path,
     *,
@@ -127,6 +160,7 @@ def _process_one_file(
     remediate: bool,
     remediate_model: str,
     dry_run: bool,
+    agent: str = "claude",
     vlm_model: str | None = None,
     max_ai_cost_usd: float | None = None,
     print_to_terminal: bool = True,
@@ -174,15 +208,7 @@ def _process_one_file(
         if print_to_terminal:
             print_report(manifest)
         if remediate:
-            from a11yfix.stage4 import build_launch_plan, launch
-
-            plan = build_launch_plan(
-                file,
-                manifest,
-                manifest_path=manifest_path,
-                model=remediate_model,
-            )
-            rc = launch(plan, dry_run=dry_run)
+            rc = _launch_stage4(agent, file, manifest, manifest_path, remediate_model, dry_run)
             return FileResult(
                 file=file,
                 manifest=manifest,
@@ -219,15 +245,7 @@ def _process_one_file(
         if print_to_terminal:
             print_report(manifest)
         if remediate:
-            from a11yfix.stage4 import build_launch_plan, launch
-
-            plan = build_launch_plan(
-                file,
-                manifest,
-                manifest_path=manifest_path,
-                model=remediate_model,
-            )
-            rc = launch(plan, dry_run=dry_run)
+            rc = _launch_stage4(agent, file, manifest, manifest_path, remediate_model, dry_run)
             return FileResult(
                 file=file,
                 manifest=manifest,
@@ -286,15 +304,7 @@ def _process_one_file(
         print_report(manifest)
 
     if remediate:
-        from a11yfix.stage4 import build_launch_plan, launch
-
-        plan = build_launch_plan(
-            file,
-            manifest,
-            manifest_path=manifest_path,
-            model=remediate_model,
-        )
-        rc = launch(plan, dry_run=dry_run)
+        rc = _launch_stage4(agent, file, manifest, manifest_path, remediate_model, dry_run)
         return FileResult(
             file=file,
             manifest=manifest,
@@ -354,6 +364,7 @@ def _run_batch(
     default_lang: str | None,
     vlm: str,
     vlm_model: str | None = None,
+    agent: str = "claude",
     max_cost_total_usd: float | None,
     per_file_timeout: int = PER_FILE_TIMEOUT_SEC,
 ) -> int:
@@ -457,6 +468,7 @@ def _run_batch(
                 "remediate": False,  # never spawn interactive in batch
                 "remediate_model": "claude-sonnet-4-6",
                 "dry_run": False,  # unused while remediate=False
+                "agent": agent,  # unused while remediate=False
                 "print_to_terminal": False,
             }
             try:
@@ -671,6 +683,13 @@ def _resolve_batch_id(batch_id: str) -> Path:
     help="Model for the stage-4 session.",
 )
 @click.option(
+    "--agent",
+    type=click.Choice(["claude", "codex"]),
+    default="claude",
+    show_default=True,
+    help="Agentic backend for stage-4 remediation (--remediate / --mode full).",
+)
+@click.option(
     "--dry-run",
     is_flag=True,
     help="With --remediate: print the launch command, don't execute.",
@@ -740,6 +759,7 @@ def main(
     vlm_model: str | None,
     remediate: bool,
     remediate_model: str,
+    agent: str,
     dry_run: bool,
     mode: str | None,
     folder: Path | None,
@@ -842,6 +862,7 @@ def main(
             default_lang=default_lang,
             vlm=vlm,
             vlm_model=vlm_model,
+            agent=agent,
             max_cost_total_usd=max_cost_total_usd,
         )
         sys.exit(rc)
@@ -863,6 +884,7 @@ def main(
         remediate=remediate,
         remediate_model=remediate_model,
         dry_run=dry_run,
+        agent=agent,
         max_ai_cost_usd=max_ai_cost_usd,
         print_to_terminal=True,
     )
