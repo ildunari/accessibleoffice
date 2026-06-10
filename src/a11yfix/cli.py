@@ -26,6 +26,7 @@ from typing import Any, cast
 
 import click
 
+from a11yfix.ai.registry import backend_names, create_adapter
 from a11yfix.manifest import (
     FileFormat,
     Finding,
@@ -78,6 +79,17 @@ def _detect_findings(doc, only_rules: set[str] | None, skip_rules: set[str]) -> 
     return findings
 
 
+def detect_findings(file: Path) -> list[Finding]:
+    """Run stage-1 detection on a document path with all rules enabled.
+
+    Public entry point for out-of-band detection runs (e.g. the stage-4
+    Codex launcher's post-session verification gate).
+    """
+    fmt = _detect_format(file)
+    doc = _open_doc(file, fmt)
+    return _detect_findings(doc, None, set())
+
+
 @dataclass
 class FileResult:
     """Outcome of a single-file run, used by both single-file and batch paths."""
@@ -102,6 +114,39 @@ class FileResult:
         return len(self.manifest.residual_findings) if self.manifest else 0
 
 
+def _launch_stage4(
+    agent: str,
+    file: Path,
+    manifest: Manifest,
+    manifest_path: Path | None,
+    remediate_model: str,
+    dry_run: bool,
+) -> int:
+    """Build the stage-4 plan and run it on the selected agentic backend.
+
+    Preserves the historical contract of ``stage4.launch``: ``--dry-run``
+    prints the plan even when the backend CLI is missing, and a missing CLI
+    skips stage 4 with exit code 4.
+    """
+    from a11yfix.stage4 import build_launch_plan, get_launcher
+
+    plan = build_launch_plan(
+        file,
+        manifest,
+        manifest_path=manifest_path,
+        model=remediate_model,
+    )
+    launcher = get_launcher(agent)
+    if not dry_run and not launcher.available():
+        click.echo(
+            f"[error] {launcher.name} CLI not found in PATH — skipping stage 4; "
+            f"manifest is at: {manifest_path}",
+            err=True,
+        )
+        return 4
+    return launcher.launch(plan, dry_run=dry_run)
+
+
 def _process_one_file(
     file: Path,
     *,
@@ -115,6 +160,8 @@ def _process_one_file(
     remediate: bool,
     remediate_model: str,
     dry_run: bool,
+    agent: str = "claude",
+    vlm_model: str | None = None,
     max_ai_cost_usd: float | None = None,
     print_to_terminal: bool = True,
 ) -> FileResult:
@@ -161,15 +208,7 @@ def _process_one_file(
         if print_to_terminal:
             print_report(manifest)
         if remediate:
-            from a11yfix.stage4 import build_launch_plan, launch
-
-            plan = build_launch_plan(
-                file,
-                manifest,
-                manifest_path=manifest_path,
-                model=remediate_model,
-            )
-            rc = launch(plan, dry_run=dry_run)
+            rc = _launch_stage4(agent, file, manifest, manifest_path, remediate_model, dry_run)
             return FileResult(
                 file=file,
                 manifest=manifest,
@@ -206,15 +245,7 @@ def _process_one_file(
         if print_to_terminal:
             print_report(manifest)
         if remediate:
-            from a11yfix.stage4 import build_launch_plan, launch
-
-            plan = build_launch_plan(
-                file,
-                manifest,
-                manifest_path=manifest_path,
-                model=remediate_model,
-            )
-            rc = launch(plan, dry_run=dry_run)
+            rc = _launch_stage4(agent, file, manifest, manifest_path, remediate_model, dry_run)
             return FileResult(
                 file=file,
                 manifest=manifest,
@@ -234,24 +265,8 @@ def _process_one_file(
     from a11yfix.fixers.single_shot import apply_single_shot_fixes
 
     try:
-        if vlm == "claude":
-            from a11yfix.ai.agent_sdk_adapter import ClaudeAgentSDKAdapter
-
-            adapter = ClaudeAgentSDKAdapter()
-        elif vlm == "claude-api":
-            from a11yfix.ai.claude_adapter import ClaudeAdapter
-
-            adapter = ClaudeAdapter()
-        else:
-            return FileResult(
-                file=file,
-                manifest=manifest,
-                manifest_path=None,
-                exit_code=4,
-                error=f"vlm={vlm} not implemented",
-                elapsed_sec=time.monotonic() - start,
-            )
-    except RuntimeError as exc:
+        adapter = create_adapter(vlm, model=vlm_model)
+    except RuntimeError as exc:  # AdapterUnavailable subclasses RuntimeError
         click.echo(f"[warning] AI adapter unavailable: {exc} — skipping stage 3", err=True)
         manifest.residual_findings = findings_left
         if output:
@@ -289,15 +304,7 @@ def _process_one_file(
         print_report(manifest)
 
     if remediate:
-        from a11yfix.stage4 import build_launch_plan, launch
-
-        plan = build_launch_plan(
-            file,
-            manifest,
-            manifest_path=manifest_path,
-            model=remediate_model,
-        )
-        rc = launch(plan, dry_run=dry_run)
+        rc = _launch_stage4(agent, file, manifest, manifest_path, remediate_model, dry_run)
         return FileResult(
             file=file,
             manifest=manifest,
@@ -356,6 +363,8 @@ def _run_batch(
     skip_csv: str | None,
     default_lang: str | None,
     vlm: str,
+    vlm_model: str | None = None,
+    agent: str = "claude",
     max_cost_total_usd: float | None,
     per_file_timeout: int = PER_FILE_TIMEOUT_SEC,
 ) -> int:
@@ -455,9 +464,11 @@ def _run_batch(
                 "skip_csv": skip_csv,
                 "default_lang": default_lang,
                 "vlm": vlm,
+                "vlm_model": vlm_model,
                 "remediate": False,  # never spawn interactive in batch
                 "remediate_model": "claude-sonnet-4-6",
                 "dry_run": False,  # unused while remediate=False
+                "agent": agent,  # unused while remediate=False
                 "print_to_terminal": False,
             }
             try:
@@ -645,14 +656,20 @@ def _resolve_batch_id(batch_id: str) -> Path:
 )
 @click.option(
     "--vlm",
-    type=click.Choice(["claude", "claude-api", "openai"]),
+    type=click.Choice(backend_names()),
     default="claude",
     show_default=True,
     help=(
-        "claude = Claude Code OAuth via claude-agent-sdk (no API key). "
-        "claude-api = Anthropic SDK (requires ANTHROPIC_API_KEY, supports vision). "
-        "openai = not implemented in v0.1."
+        "AI backend for stage-3 fixes. claude = Claude Code OAuth (no API key). "
+        "claude-api/anthropic = Anthropic SDK (ANTHROPIC_API_KEY). "
+        "openai/openrouter = direct chat-completions API "
+        "(OPENAI_API_KEY / OPENROUTER_API_KEY)."
     ),
+)
+@click.option(
+    "--vlm-model",
+    default=None,
+    help="Override the backend's default model (e.g. gpt-5-mini, anthropic/claude-haiku-4.5).",
 )
 @click.option(
     "--remediate",
@@ -664,6 +681,13 @@ def _resolve_batch_id(batch_id: str) -> Path:
     default="claude-sonnet-4-6",
     show_default=True,
     help="Model for the stage-4 session.",
+)
+@click.option(
+    "--agent",
+    type=click.Choice(["claude", "codex"]),
+    default="claude",
+    show_default=True,
+    help="Agentic backend for stage-4 remediation (--remediate / --mode full).",
 )
 @click.option(
     "--dry-run",
@@ -732,8 +756,10 @@ def main(
     max_ai_cost_usd: float,
     default_lang: str | None,
     vlm: str,
+    vlm_model: str | None,
     remediate: bool,
     remediate_model: str,
+    agent: str,
     dry_run: bool,
     mode: str | None,
     folder: Path | None,
@@ -835,6 +861,8 @@ def main(
             skip_csv=skip_csv,
             default_lang=default_lang,
             vlm=vlm,
+            vlm_model=vlm_model,
+            agent=agent,
             max_cost_total_usd=max_cost_total_usd,
         )
         sys.exit(rc)
@@ -852,9 +880,11 @@ def main(
         skip_csv=skip_csv,
         default_lang=default_lang,
         vlm=vlm,
+        vlm_model=vlm_model,
         remediate=remediate,
         remediate_model=remediate_model,
         dry_run=dry_run,
+        agent=agent,
         max_ai_cost_usd=max_ai_cost_usd,
         print_to_terminal=True,
     )

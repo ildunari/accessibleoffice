@@ -8,9 +8,12 @@ from typing import Any
 
 from a11yfix.ai.adapter import (
     AltTextResult,
+    CallUsage,
     LinkTextResult,
     SlideTitleResult,
 )
+from a11yfix.ai.confidence import confidence_from_text
+from a11yfix.ai.errors import AdapterUnavailable
 from a11yfix.ai.prompts import (
     ALT_TEXT_SYSTEM,
     LINK_TEXT_SYSTEM,
@@ -24,26 +27,27 @@ DEFAULT_MODEL = "claude-haiku-4-5-20251001"  # cheap default for single-shot cal
 
 
 class ClaudeAdapter:
-    name = "claude"
+    # Must match the registry key: manifests record ai_model = adapter.name
+    # and the live-smoke gate substring-checks it against the --vlm value.
+    # Bare "claude" is the SDK backend's key.
+    name = "claude-api"
 
     def __init__(self, *, model: str = DEFAULT_MODEL, api_key: str | None = None) -> None:
         try:
             import anthropic  # type: ignore[import-untyped]
         except ImportError as exc:
-            raise RuntimeError("anthropic package not installed") from exc
+            raise AdapterUnavailable("anthropic package not installed") from exc
+        key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        if not key:
+            raise AdapterUnavailable(
+                "ANTHROPIC_API_KEY not set (required for --vlm claude-api/anthropic)"
+            )
         self._anthropic = anthropic
-        self._client = anthropic.Anthropic(api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"))
+        self._client = anthropic.Anthropic(api_key=key)
         self._model = model
 
     def _confidence_from_text(self, text: str, max_chars: int) -> float:
-        if not text:
-            return 0.0
-        if "UNCLEAR" in text or "DECORATIVE" in text:
-            return 0.95  # explicit signal — actually high confidence in saying "I don't know"
-        # If the model returned overly long text, low confidence.
-        if len(text) > max_chars * 1.5:
-            return 0.4
-        return 0.85
+        return confidence_from_text(text, max_chars)
 
     # --- alt text ---
     def describe_image(self, image_bytes: bytes, *, max_chars: int, context: str) -> AltTextResult:
@@ -82,6 +86,7 @@ class ClaudeAdapter:
             text=text,
             confidence=self._confidence_from_text(text, max_chars),
             model=self._model,
+            usage=_usage_from_message(msg),
         )
 
     def suggest_link_text(self, url: str, surrounding_text: str) -> LinkTextResult:
@@ -101,6 +106,7 @@ class ClaudeAdapter:
             text=text,
             confidence=self._confidence_from_text(text, max_chars=64),
             model=self._model,
+            usage=_usage_from_message(msg),
         )
 
     def suggest_slide_title(self, slide_text: str, slide_layout: str) -> SlideTitleResult:
@@ -120,6 +126,7 @@ class ClaudeAdapter:
             text=text,
             confidence=self._confidence_from_text(text, max_chars=80),
             model=self._model,
+            usage=_usage_from_message(msg),
         )
 
     @staticmethod
@@ -129,3 +136,23 @@ class ClaudeAdapter:
             if getattr(block, "type", None) == "text":
                 return getattr(block, "text", "") or ""
         return ""
+
+
+def _usage_from_message(msg: Any) -> CallUsage | None:
+    """Token counts from the Anthropic response; the pipeline estimates USD.
+
+    Malformed payloads yield None (the call goes unmetered) rather than an
+    exception that would defer a finding whose model call already succeeded.
+    """
+    usage = getattr(msg, "usage", None)
+    if usage is None:
+        return None
+    try:
+        return CallUsage(
+            input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+            output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+            cache_read_tokens=int(getattr(usage, "cache_read_input_tokens", 0) or 0),
+            cache_creation_tokens=int(getattr(usage, "cache_creation_input_tokens", 0) or 0),
+        )
+    except (TypeError, ValueError):
+        return None

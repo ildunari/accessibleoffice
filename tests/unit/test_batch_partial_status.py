@@ -7,6 +7,11 @@ newest progress entry — not once per attempt.
 
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
+
+import pytest
+
 from a11yfix.batch import (
     aggregate_rollup,
     create_batch,
@@ -85,3 +90,97 @@ def test_rollup_counts_partial_files(tmp_path):
     assert rollup.files_done == 0
     # Partial files are not failures: no error entry for them.
     assert [e["file"] for e in rollup.errors] == [str(tmp_path / "b.pptx")]
+
+
+@pytest.mark.parametrize("backend", ["pi", "opencode", "codex"])
+def test_missing_agent_cli_binary_yields_partial_shape(
+    backend: str, docx_no_title: Path, tmp_path, monkeypatch
+) -> None:
+    """--vlm pi/opencode/codex with the binary missing skips stage 3, not the file.
+
+    The per-file pipeline must return the exact FileResult shape _run_batch
+    classifies as 'partial' (exit_code == 0, error set, manifest_path set):
+    stages 1-2 ran and wrote a manifest; stage 3 was skipped because
+    create_adapter raised AdapterUnavailable for the missing binary.
+    """
+    from a11yfix.cli import _process_one_file
+
+    # Stage 2 mutates the file in place — work on a copy, not the session fixture.
+    f = tmp_path / "doc.docx"
+    shutil.copy(docx_no_title, f)
+    out = tmp_path / "doc.manifest.json"
+
+    monkeypatch.setattr("shutil.which", lambda *a, **k: None)
+
+    result = _process_one_file(
+        f,
+        report_only=False,
+        auto_only=False,
+        output=out,
+        rules_csv=None,
+        skip_csv=None,
+        default_lang=None,
+        vlm=backend,
+        vlm_model=None,
+        remediate=False,
+        remediate_model="claude-sonnet-4-6",
+        dry_run=False,
+        print_to_terminal=False,
+    )
+
+    # The partial predicate in _run_batch: exit_code == 0 AND error AND manifest_path.
+    assert result.exit_code == 0
+    assert result.error is not None and "adapter unavailable" in result.error
+    assert result.manifest_path == out
+    assert out.exists(), "stages 1-2 must still write the manifest"
+    assert result.manifest is not None
+    assert result.manifest.stage_1_findings_total >= 1, "stage 1 must have run"
+
+
+def test_batch_run_records_partial_when_vlm_binary_missing(
+    docx_no_title: Path, tmp_path, monkeypatch
+) -> None:
+    """End-to-end: a batch run with --vlm pi and no `pi` on PATH lands partial.
+
+    Drives the real _run_batch (spawned worker subprocess included) — this is
+    the regression guard that --vlm actually reaches the per-file pipeline in
+    batch mode. The worker inherits the environment, so stripping PATH makes
+    the binary genuinely missing inside the child process.
+    """
+    from a11yfix.cli import _run_batch
+
+    f = tmp_path / "doc.docx"
+    shutil.copy(docx_no_title, f)
+    state = create_batch(files=[f], state_dir=tmp_path / "state", mode="full-dry")
+
+    # _run_batch sets these in os.environ; setenv registers cleanup with
+    # monkeypatch (delenv on an absent var registers nothing, so the value
+    # _run_batch writes would otherwise leak into later tests).
+    monkeypatch.setenv("A11YFIX_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.delenv("A11YFIX_MAX_COST_TOTAL_USD", raising=False)
+    # Spawn uses sys.executable directly, so an empty PATH only hides `pi`.
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
+
+    rc = _run_batch(
+        Path(state.state_dir),
+        mode="full-dry",
+        auto_only=False,
+        report_only=False,
+        rules_csv=None,
+        skip_csv=None,
+        default_lang=None,
+        vlm="pi",
+        vlm_model=None,
+        max_cost_total_usd=None,
+        per_file_timeout=120,
+    )
+
+    latest = latest_progress_by_file(state.state_dir, state.shards[0].id)
+    entry = latest[str(f)]
+    assert entry["status"] == "partial", entry
+    assert "adapter unavailable" in (entry.get("error") or "")
+    rollup = aggregate_rollup(state.state_dir)
+    assert rollup.files_partial == 1
+    assert rollup.files_failed == 0
+    # Partial counts as not-success at the process level.
+    assert rc == 5

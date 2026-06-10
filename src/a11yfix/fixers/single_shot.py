@@ -71,6 +71,28 @@ def _cache_put(payload: str, value: dict, *, min_confidence: float = 0.7) -> Non
     _cache_key(payload).write_text(json.dumps(value))
 
 
+def _record_usage(res) -> None:
+    """Record one fresh adapter call into the batch cost ledger.
+
+    Centralized here (not in adapters) so every backend meters identically
+    and cache hits never record. Backend-reported USD wins over estimates.
+    """
+    usage = getattr(res, "usage", None)
+    if usage is None:
+        return
+    meter = CostMeter.from_env()
+    if usage.cost_usd is not None:
+        meter.record_usd(model=res.model, usd=usage.cost_usd)
+    else:
+        meter.record(
+            model=res.model,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cache_read_tokens=usage.cache_read_tokens,
+            cache_creation_tokens=usage.cache_creation_tokens,
+        )
+
+
 def _slide_text(doc: DocumentHandle, slide_idx: int) -> tuple[str, str]:
     from a11yfix.ooxml.namespaces import qn
     from a11yfix.ooxml.pptx_reader import PptxHandle
@@ -101,7 +123,8 @@ def apply_single_shot_fixes(
 
     If `max_cost_total_usd` is set, the batch's CostMeter is consulted before
     every adapter call; once the cap is reached, remaining findings defer
-    instead of calling the model. Per-call cost is recorded by the adapter.
+    instead of calling the model. Per-call cost is recorded centrally from
+    each result's `usage`.
     """
     applied: list[AppliedFix] = []
     deferred: list[Finding] = []
@@ -154,6 +177,7 @@ def apply_single_shot_fixes(
                     res = adapter.describe_image(
                         img_bytes, max_chars=125, context=ctx
                     )
+                    _record_usage(res)
                     text, conf, model = res.text, res.confidence, res.model
                     _cache_put(key, {"text": text, "confidence": conf, "model": model})
                 if "DECORATIVE" in text:
@@ -198,6 +222,7 @@ def apply_single_shot_fixes(
                     text, conf, model = cached["text"], cached["confidence"], cached["model"]
                 else:
                     res = adapter.suggest_link_text(url=url, surrounding_text=surrounding)
+                    _record_usage(res)
                     text, conf, model = res.text, res.confidence, res.model
                     _cache_put(key, {"text": text, "confidence": conf, "model": model})
                 if "UNCLEAR" in text:
@@ -237,6 +262,7 @@ def apply_single_shot_fixes(
                     text, conf, model = cached["text"], cached["confidence"], cached["model"]
                 else:
                     res = adapter.suggest_slide_title(text_ctx, layout)
+                    _record_usage(res)
                     text, conf, model = res.text, res.confidence, res.model
                     _cache_put(key, {"text": text, "confidence": conf, "model": model})
                 if "UNCLEAR" in text:
