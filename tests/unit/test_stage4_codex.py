@@ -85,6 +85,32 @@ def test_follow_up_recovers(tmp_path, monkeypatch):
     assert plan.file.read_bytes() == b"fake"
 
 
+def test_session_timeout_restores_backup(tmp_path, monkeypatch):
+    # fake codex that outlives the timeout
+    script = tmp_path / "bin" / "codex"
+    script.parent.mkdir()
+    script.write_text("#!/bin/sh\nsleep 5\n")
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{script.parent}:{os.environ['PATH']}")
+    monkeypatch.setattr("a11yfix.stage4_codex.SESSION_TIMEOUT", 1)
+    counts = iter([2, 5, 5])  # baseline, after timeout, after resume (also times out)
+    monkeypatch.setattr("a11yfix.stage4_codex._error_count", lambda f: next(counts))
+    plan = _plan(tmp_path)
+    assert CodexLauncher().launch(plan) == 7
+    assert plan.file.read_bytes() == b"orig"
+
+
+def test_regression_without_backup_prints_diagnostic(tmp_path, monkeypatch, capsys):
+    _fake_codex(tmp_path, monkeypatch)
+    counts = iter([2, 5, 5])  # baseline 2, regression persists through follow-up
+    monkeypatch.setattr("a11yfix.stage4_codex._error_count", lambda f: next(counts))
+    plan = _plan(tmp_path)
+    plan.backup = None
+    assert CodexLauncher().launch(plan) == 7
+    assert plan.file.read_bytes() == b"fake"  # not restored
+    assert "no backup available, file left as-is" in capsys.readouterr().out
+
+
 def test_error_count_runs_real_detection(docx_no_title: Path, tmp_path):
     f = tmp_path / "doc.docx"
     shutil.copy(docx_no_title, f)

@@ -69,35 +69,53 @@ class CodexLauncher:
             return 0
 
         baseline = _error_count(plan.file)
-        proc = subprocess.run(cmd, timeout=SESSION_TIMEOUT)
+        try:
+            session_rc = subprocess.run(cmd, timeout=SESSION_TIMEOUT).returncode
+        except subprocess.TimeoutExpired:
+            # A timed-out session may have left the file half-modified, so it
+            # must still fall through to the verify-restore rail below. The
+            # codex returncode is unavailable; report 1 because a timeout is
+            # never "success", even if the file happens to verify clean.
+            print(f"[stage4-codex] session timed out after {SESSION_TIMEOUT}s; verifying file")
+            session_rc = 1
 
         ok, after = _verify(plan.file, baseline)
         if not ok:
-            subprocess.run(
-                [
-                    "codex",
-                    "exec",
-                    "resume",
-                    "--last",
-                    "--skip-git-repo-check",
-                    "-s",
-                    "workspace-write",
-                    "-C",
-                    str(plan.file.parent),
-                    "-a",
-                    "never",
-                    f"Verification failed: error findings went {baseline} -> {after}. "
-                    "Re-check your officecli ops and fix the regression.",
-                ],
-                timeout=SESSION_TIMEOUT,
-            )
+            try:
+                subprocess.run(
+                    [
+                        "codex",
+                        "exec",
+                        "resume",
+                        "--last",
+                        "--skip-git-repo-check",
+                        "-s",
+                        "workspace-write",
+                        "-C",
+                        str(plan.file.parent),
+                        "-a",
+                        "never",
+                        f"Verification failed: error findings went {baseline} -> {after}. "
+                        "Re-check your officecli ops and fix the regression.",
+                    ],
+                    timeout=SESSION_TIMEOUT,
+                )
+            except subprocess.TimeoutExpired:
+                # Same rationale: the second verification below decides
+                # whether to restore the backup, not the resume's fate.
+                print(f"[stage4-codex] resume timed out after {SESSION_TIMEOUT}s; verifying file")
             ok, after = _verify(plan.file, baseline)
         if not ok:
             if plan.backup and plan.backup.exists():
                 shutil.copy2(plan.backup, plan.file)
                 print(f"[stage4-codex] regression ({baseline} -> {after}); restored backup")
+            else:
+                print(
+                    f"[stage4-codex] regression ({baseline} -> {after}); "
+                    "no backup available, file left as-is"
+                )
             return EXIT_VERIFY_REGRESSION
-        return proc.returncode
+        return session_rc
 
 
 def _error_count(file: Path) -> int:
