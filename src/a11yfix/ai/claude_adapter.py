@@ -13,6 +13,7 @@ from a11yfix.ai.adapter import (
     SlideTitleResult,
 )
 from a11yfix.ai.confidence import confidence_from_text
+from a11yfix.ai.errors import AdapterUnavailable
 from a11yfix.ai.prompts import (
     ALT_TEXT_SYSTEM,
     LINK_TEXT_SYSTEM,
@@ -32,9 +33,14 @@ class ClaudeAdapter:
         try:
             import anthropic  # type: ignore[import-untyped]
         except ImportError as exc:
-            raise RuntimeError("anthropic package not installed") from exc
+            raise AdapterUnavailable("anthropic package not installed") from exc
+        key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        if not key:
+            raise AdapterUnavailable(
+                "ANTHROPIC_API_KEY not set (required for --vlm claude-api/anthropic)"
+            )
         self._anthropic = anthropic
-        self._client = anthropic.Anthropic(api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"))
+        self._client = anthropic.Anthropic(api_key=key)
         self._model = model
 
     def _confidence_from_text(self, text: str, max_chars: int) -> float:

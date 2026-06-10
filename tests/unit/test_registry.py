@@ -29,6 +29,14 @@ def test_unavailable_backend_raises(monkeypatch):
         create_adapter("claude-api")
 
 
+def test_claude_api_missing_key_unavailable(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    from a11yfix.ai.claude_adapter import ClaudeAdapter
+
+    with pytest.raises(AdapterUnavailable):
+        ClaudeAdapter()
+
+
 def test_pi_backend_registered():
     assert "pi" in backend_names()
 
