@@ -153,9 +153,10 @@ def test_batch_run_records_partial_when_vlm_binary_missing(
     shutil.copy(docx_no_title, f)
     state = create_batch(files=[f], state_dir=tmp_path / "state", mode="full-dry")
 
-    # _run_batch sets these in os.environ; register them with monkeypatch so
-    # they are removed again after the test.
-    monkeypatch.delenv("A11YFIX_STATE_DIR", raising=False)
+    # _run_batch sets these in os.environ; setenv registers cleanup with
+    # monkeypatch (delenv on an absent var registers nothing, so the value
+    # _run_batch writes would otherwise leak into later tests).
+    monkeypatch.setenv("A11YFIX_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.delenv("A11YFIX_MAX_COST_TOTAL_USD", raising=False)
     # Spawn uses sys.executable directly, so an empty PATH only hides `pi`.
     monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))

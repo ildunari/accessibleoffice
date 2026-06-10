@@ -30,6 +30,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from a11yfix.manifest import FileFormat, Manifest
 
@@ -544,3 +545,35 @@ def launch(plan: LaunchPlan, *, dry_run: bool = False) -> int:
     cmd = render_launch_command(plan)
     proc = subprocess.run(cmd, env=os.environ.copy())
     return proc.returncode
+
+
+# --------------------------------------------------------------------------
+# Agentic backend selection
+# --------------------------------------------------------------------------
+
+
+class AgenticLauncher(Protocol):
+    name: str
+
+    def available(self) -> bool: ...
+    def launch(self, plan: LaunchPlan, *, dry_run: bool = False) -> int: ...
+
+
+class ClaudeLauncher:
+    name = "claude"
+
+    def available(self) -> bool:
+        return claude_cli_available()
+
+    def launch(self, plan: LaunchPlan, *, dry_run: bool = False) -> int:
+        return launch(plan, dry_run=dry_run)
+
+
+def get_launcher(agent: str) -> AgenticLauncher:
+    if agent == "claude":
+        return ClaudeLauncher()
+    if agent == "codex":
+        from a11yfix.stage4_codex import CodexLauncher
+
+        return CodexLauncher()
+    raise ValueError(f"unknown agentic backend {agent!r}; valid: claude, codex")
