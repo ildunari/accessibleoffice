@@ -26,6 +26,7 @@ from typing import Any, cast
 
 import click
 
+from a11yfix.ai.registry import backend_names, create_adapter
 from a11yfix.manifest import (
     FileFormat,
     Finding,
@@ -115,6 +116,7 @@ def _process_one_file(
     remediate: bool,
     remediate_model: str,
     dry_run: bool,
+    vlm_model: str | None = None,
     max_ai_cost_usd: float | None = None,
     print_to_terminal: bool = True,
 ) -> FileResult:
@@ -234,24 +236,8 @@ def _process_one_file(
     from a11yfix.fixers.single_shot import apply_single_shot_fixes
 
     try:
-        if vlm == "claude":
-            from a11yfix.ai.agent_sdk_adapter import ClaudeAgentSDKAdapter
-
-            adapter = ClaudeAgentSDKAdapter()
-        elif vlm == "claude-api":
-            from a11yfix.ai.claude_adapter import ClaudeAdapter
-
-            adapter = ClaudeAdapter()
-        else:
-            return FileResult(
-                file=file,
-                manifest=manifest,
-                manifest_path=None,
-                exit_code=4,
-                error=f"vlm={vlm} not implemented",
-                elapsed_sec=time.monotonic() - start,
-            )
-    except RuntimeError as exc:
+        adapter = create_adapter(vlm, model=vlm_model)
+    except RuntimeError as exc:  # AdapterUnavailable subclasses RuntimeError
         click.echo(f"[warning] AI adapter unavailable: {exc} — skipping stage 3", err=True)
         manifest.residual_findings = findings_left
         if output:
@@ -356,6 +342,7 @@ def _run_batch(
     skip_csv: str | None,
     default_lang: str | None,
     vlm: str,
+    vlm_model: str | None = None,
     max_cost_total_usd: float | None,
     per_file_timeout: int = PER_FILE_TIMEOUT_SEC,
 ) -> int:
@@ -455,6 +442,7 @@ def _run_batch(
                 "skip_csv": skip_csv,
                 "default_lang": default_lang,
                 "vlm": vlm,
+                "vlm_model": vlm_model,
                 "remediate": False,  # never spawn interactive in batch
                 "remediate_model": "claude-sonnet-4-6",
                 "dry_run": False,  # unused while remediate=False
@@ -645,14 +633,18 @@ def _resolve_batch_id(batch_id: str) -> Path:
 )
 @click.option(
     "--vlm",
-    type=click.Choice(["claude", "claude-api", "openai"]),
+    type=click.Choice(backend_names()),
     default="claude",
     show_default=True,
     help=(
-        "claude = Claude Code OAuth via claude-agent-sdk (no API key). "
-        "claude-api = Anthropic SDK (requires ANTHROPIC_API_KEY, supports vision). "
-        "openai = not implemented in v0.1."
+        "AI backend for stage-3 fixes. claude = Claude Code OAuth (no API key). "
+        "claude-api/anthropic = Anthropic SDK (ANTHROPIC_API_KEY)."
     ),
+)
+@click.option(
+    "--vlm-model",
+    default=None,
+    help="Override the backend's default model (e.g. gpt-5-mini, anthropic/claude-haiku-4.5).",
 )
 @click.option(
     "--remediate",
@@ -732,6 +724,7 @@ def main(
     max_ai_cost_usd: float,
     default_lang: str | None,
     vlm: str,
+    vlm_model: str | None,
     remediate: bool,
     remediate_model: str,
     dry_run: bool,
@@ -835,6 +828,7 @@ def main(
             skip_csv=skip_csv,
             default_lang=default_lang,
             vlm=vlm,
+            vlm_model=vlm_model,
             max_cost_total_usd=max_cost_total_usd,
         )
         sys.exit(rc)
@@ -852,6 +846,7 @@ def main(
         skip_csv=skip_csv,
         default_lang=default_lang,
         vlm=vlm,
+        vlm_model=vlm_model,
         remediate=remediate,
         remediate_model=remediate_model,
         dry_run=dry_run,
