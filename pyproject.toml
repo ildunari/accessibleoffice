@@ -41,6 +41,18 @@ accessibleoffice-rollup = "a11yfix.cli_rollup:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/a11yfix"]
 
+[tool.hatch.build.targets.sdist]
+# prepare-resources.sh drops a ~31 MB platform-specific OfficeCLI binary into
+# desktop/src-tauri/resources/ for Tauri builds; hatchling sweeps it into the
+# sdist despite the gitignore, inflating it ~100x. Desktop build outputs have
+# no place in the Python source distribution.
+exclude = [
+    "desktop/src-tauri/resources/**",
+    "desktop/src-tauri/target/**",
+    "desktop/node_modules/**",
+    "desktop/dist/**",
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
