@@ -64,6 +64,32 @@ def test_http_error_raises_call_error(monkeypatch):
         a.suggest_link_text(url="https://x.test", surrounding_text="see")
 
 
+def test_4xx_fails_fast_no_retry(monkeypatch):
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(401, text="bad key")
+
+    a = _adapter(monkeypatch, handler)
+    with pytest.raises(AdapterCallError):
+        a.suggest_link_text(url="https://x.test", surrounding_text="see")
+    assert len(calls) == 1
+
+
+def test_malformed_body_fails_fast_no_retry(monkeypatch):
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(200, json={"nope": 1})
+
+    a = _adapter(monkeypatch, handler)
+    with pytest.raises(AdapterCallError):
+        a.suggest_link_text(url="https://x.test", surrounding_text="see")
+    assert len(calls) == 1
+
+
 def test_openrouter_base_url(monkeypatch):
     seen = {}
 

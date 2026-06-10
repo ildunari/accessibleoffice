@@ -75,11 +75,20 @@ class DirectLLMAdapter:
         for attempt in range(_RETRIES):
             try:
                 r = self._client.post(f"{self._base_url}/chat/completions", json=body)
-                if r.status_code in (429, 500, 502, 503, 529):
-                    last = AdapterCallError(f"HTTP {r.status_code}: {r.text[:200]}")
+            except httpx.TransportError as exc:
+                last = exc
+                if attempt < _RETRIES - 1:
                     time.sleep(0.5 * 2**attempt)
-                    continue
-                r.raise_for_status()
+                continue
+            if r.status_code == 429 or r.status_code >= 500:
+                last = AdapterCallError(f"HTTP {r.status_code}: {r.text[:200]}")
+                if attempt < _RETRIES - 1:
+                    time.sleep(0.5 * 2**attempt)
+                continue
+            if r.status_code >= 400:
+                # Non-retryable client error (bad key, bad request, ...) — fail fast.
+                raise AdapterCallError(f"{self.name}: HTTP {r.status_code}: {r.text[:200]}")
+            try:
                 data = r.json()
                 text = (data["choices"][0]["message"]["content"] or "").strip()
                 u = data.get("usage") or {}
@@ -87,10 +96,10 @@ class DirectLLMAdapter:
                     input_tokens=int(u.get("prompt_tokens") or 0),
                     output_tokens=int(u.get("completion_tokens") or 0),
                 )
-                return text, usage
-            except (httpx.HTTPError, KeyError, IndexError, ValueError) as exc:
-                last = exc
-                time.sleep(0.5 * 2**attempt)
+            except (KeyError, IndexError, TypeError, ValueError) as exc:
+                # Deterministic parse failure — retrying the same request won't help.
+                raise AdapterCallError(f"{self.name}: malformed response: {exc}") from exc
+            return text, usage
         raise AdapterCallError(f"{self.name}: {last}") from last
 
     def describe_image(
