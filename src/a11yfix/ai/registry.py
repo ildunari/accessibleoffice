@@ -41,12 +41,19 @@ def _openrouter(model: str | None) -> VLMAdapter:
     return DirectLLMAdapter(provider="openrouter", model=model)
 
 
+def _pi(model: str | None) -> VLMAdapter:
+    from a11yfix.ai.pi_adapter import PiAdapter
+
+    return PiAdapter(model=model)
+
+
 _BACKENDS: dict[str, Callable[[str | None], VLMAdapter]] = {
     "claude": _claude,
     "claude-api": _claude_api,
     "anthropic": _claude_api,  # alias: "direct Anthropic API"
     "openai": _openai,
     "openrouter": _openrouter,
+    "pi": _pi,
 }
 
 

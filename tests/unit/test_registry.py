@@ -27,3 +27,7 @@ def test_unavailable_backend_raises(monkeypatch):
     monkeypatch.setitem(reg._BACKENDS, "claude-api", boom)
     with pytest.raises(AdapterUnavailable):
         create_adapter("claude-api")
+
+
+def test_pi_backend_registered():
+    assert "pi" in backend_names()
