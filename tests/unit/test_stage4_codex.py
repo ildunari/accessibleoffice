@@ -66,6 +66,22 @@ def test_dry_run_executes_nothing(tmp_path, monkeypatch):
     assert not log.exists()
 
 
+def test_non_codex_model_swap_prints_notice(tmp_path, monkeypatch, capsys):
+    """Swapping the requested model (e.g. the default claude-sonnet-4-6) for
+    a codex model must not be silent."""
+    _fake_codex(tmp_path, monkeypatch)
+    plan = _plan(tmp_path)
+    plan.model = "claude-sonnet-4-6"
+    assert CodexLauncher().launch(plan, dry_run=True) == 0
+    assert "is not a codex model" in capsys.readouterr().out
+
+
+def test_codex_model_no_swap_notice_for_gpt_models(tmp_path, monkeypatch, capsys):
+    _fake_codex(tmp_path, monkeypatch)
+    assert CodexLauncher().launch(_plan(tmp_path), dry_run=True) == 0
+    assert "is not a codex model" not in capsys.readouterr().out
+
+
 def test_regression_restores_backup(tmp_path, monkeypatch):
     log = _fake_codex(tmp_path, monkeypatch)
     counts = iter([2, 5, 5])  # baseline 2, after session 5, after follow-up 5

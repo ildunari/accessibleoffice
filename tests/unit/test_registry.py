@@ -37,6 +37,15 @@ def test_claude_api_missing_key_unavailable(monkeypatch):
         ClaudeAdapter()
 
 
+def test_claude_api_adapter_name_matches_backend_key():
+    """Manifests record ai_model = adapter.name and the live-smoke gate checks
+    '"claude-api" in ai_model' — the API adapter must not reuse "claude",
+    which is the registry key of the SDK backend."""
+    from a11yfix.ai.claude_adapter import ClaudeAdapter
+
+    assert ClaudeAdapter.name == "claude-api"
+
+
 def test_pi_backend_registered():
     assert "pi" in backend_names()
 

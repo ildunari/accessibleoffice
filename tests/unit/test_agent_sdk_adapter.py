@@ -42,6 +42,28 @@ def test_prepare_image_for_read_compresses_large_png_under_limit():
         assert max(im.size) <= agent_sdk_adapter.MAX_READ_IMAGE_DIMENSION
 
 
+def test_missing_package_raises_adapter_unavailable(monkeypatch):
+    """Registry contract: factories raise AdapterUnavailable from the
+    constructor when the backend can't run (F1). No `claude` CLI probe is
+    needed — claude-agent-sdk ships a bundled CLI and prefers it over PATH."""
+    import builtins
+
+    import pytest
+
+    from a11yfix.ai.errors import AdapterUnavailable
+
+    real_import = builtins.__import__
+
+    def no_sdk(name, *args, **kwargs):
+        if name == "claude_agent_sdk":
+            raise ImportError("No module named 'claude_agent_sdk'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_sdk)
+    with pytest.raises(AdapterUnavailable, match="claude-agent-sdk not installed"):
+        agent_sdk_adapter.ClaudeAgentSDKAdapter()
+
+
 def test_describe_image_maps_sdk_payload_error_to_clean_runtime_error(monkeypatch):
     adapter = object.__new__(agent_sdk_adapter.ClaudeAgentSDKAdapter)
     adapter._model = "fake-model"

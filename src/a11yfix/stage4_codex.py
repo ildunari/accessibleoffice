@@ -46,7 +46,14 @@ class CodexLauncher:
 
     def launch(self, plan: LaunchPlan, *, dry_run: bool = False) -> int:
         prompt = _codex_bootstrap(plan.manifest, plan.file)
-        model = plan.model if plan.model.startswith("gpt") else DEFAULT_CODEX_MODEL
+        if plan.model.startswith("gpt"):
+            model = plan.model
+        else:
+            model = DEFAULT_CODEX_MODEL
+            print(
+                f"[stage4-codex] model {plan.model!r} is not a codex model; "
+                f"using {DEFAULT_CODEX_MODEL}"
+            )
         cmd = [
             "codex",
             "exec",

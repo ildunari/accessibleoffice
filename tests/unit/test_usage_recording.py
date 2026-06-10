@@ -6,7 +6,7 @@ from PIL import Image  # type: ignore[import-untyped]
 from pptx import Presentation  # type: ignore[import-untyped]
 from pptx.util import Inches  # type: ignore[import-untyped]
 
-from a11yfix.ai.adapter import AltTextResult, CallUsage
+from a11yfix.ai.adapter import AltTextResult, CallUsage, LinkTextResult
 from a11yfix.cost_meter import _DEFAULT_PRICE_INPUT, CostMeter
 from a11yfix.fixers import single_shot
 from a11yfix.fixers.single_shot import _record_usage
@@ -126,3 +126,65 @@ def test_cache_hit_records_nothing(tmp_path: Path, monkeypatch):
     assert calls == [], "cache hit must not call the adapter"
     assert [fx.after for fx in result.applied] == ["Cached alt text"]
     assert CostMeter.from_env().total() == 0.0
+
+
+def test_cap_applies_to_any_adapter(tmp_path: Path, monkeypatch):
+    """The cost-cap gate is enforced by the pipeline from result.usage, so it
+    binds every backend — not just the Claude SDK adapter (F4). The gate runs
+    before each adapter call and trips once recorded spend exceeds the cap
+    (strictly: meter.total() > cap), so the first 0.30 call against a 0.25
+    cap is allowed and the second finding must defer without a model call."""
+    from tests.unit.test_fixers_partial_results import FakeDoc, FakeRule, _finding
+
+    monkeypatch.setenv("A11YFIX_STATE_DIR", str(tmp_path / "state"))
+
+    class CostedAdapter:
+        name = "costed"
+
+        def __init__(self):
+            self.calls = 0
+
+        def suggest_link_text(self, url, surrounding_text):
+            self.calls += 1
+            return LinkTextResult(
+                text="descriptive link", confidence=0.9, model="costed",
+                usage=CallUsage(cost_usd=0.30),
+            )
+
+    class OkClient:
+        backup_path = None
+
+        def __init__(self, path, **kwargs):
+            self.path = path
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def batch(self, ops):
+            return BatchResult(success=True, per_op=[{"ok": True} for _ in ops])
+
+        def validate(self):
+            return ValidationResult(status="ok")
+
+    monkeypatch.setitem(single_shot.REGISTRY, "fake-rule", FakeRule())
+    monkeypatch.setattr(single_shot, "OfficecliClient", OkClient)
+
+    doc = FakeDoc(tmp_path / "deck.pptx")
+    adapter = CostedAdapter()
+    f1, f2 = _finding(1), _finding(2)
+    # Distinct surrounding text so f2 can never be satisfied from f1's cache
+    # entry — the deferral below must come from the cap gate alone.
+    f2.extra["shape_text"] = "tap this"
+
+    result = single_shot.apply_single_shot_fixes(
+        [f1, f2], doc, adapter, max_cost_total_usd=0.25
+    )
+
+    assert adapter.calls == 1, "cap must stop the second model call"
+    assert [fx.finding_id for fx in result.applied] == ["f1"]
+    assert abs(CostMeter.from_env().total() - 0.30) < 1e-9
+    assert [f.id for f in result.deferred] == ["f2"]
+    assert "cost cap" in result.deferred[0].why_human_needed

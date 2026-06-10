@@ -27,7 +27,10 @@ DEFAULT_MODEL = "claude-haiku-4-5-20251001"  # cheap default for single-shot cal
 
 
 class ClaudeAdapter:
-    name = "claude"
+    # Must match the registry key: manifests record ai_model = adapter.name
+    # and the live-smoke gate substring-checks it against the --vlm value.
+    # Bare "claude" is the SDK backend's key.
+    name = "claude-api"
 
     def __init__(self, *, model: str = DEFAULT_MODEL, api_key: str | None = None) -> None:
         try:

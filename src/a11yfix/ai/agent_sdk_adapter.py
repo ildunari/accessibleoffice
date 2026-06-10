@@ -32,6 +32,7 @@ from a11yfix.ai.adapter import (
     SlideTitleResult,
 )
 from a11yfix.ai.confidence import confidence_from_text
+from a11yfix.ai.errors import AdapterUnavailable
 from a11yfix.ai.prompts import (
     ALT_TEXT_SYSTEM,
     LINK_TEXT_SYSTEM,
@@ -76,10 +77,13 @@ class ClaudeAgentSDKAdapter:
     supports_vision = True  # via Read-tool path on a temp file
 
     def __init__(self, *, model: str = DEFAULT_MODEL) -> None:
+        # No `claude` CLI probe: claude-agent-sdk ships a bundled CLI
+        # (claude_agent_sdk/_bundled/claude) and prefers it over PATH, so a
+        # shutil.which("claude") check would false-negative on valid installs.
         try:
             import claude_agent_sdk  # noqa: F401
         except ImportError as exc:
-            raise RuntimeError(
+            raise AdapterUnavailable(
                 "claude-agent-sdk not installed; pip install claude-agent-sdk"
             ) from exc
         self._model = model
