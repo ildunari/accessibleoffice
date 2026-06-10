@@ -29,6 +29,9 @@ _PRICE_PER_M_INPUT = {
     "claude-sonnet-4-6": 3.0,
     "claude-sonnet-4-5": 3.0,
     "claude-haiku-4-5": 1.0,
+    # OpenAI rows (verified against platform.openai.com/docs/pricing, Jun 2026)
+    "gpt-5.5": 5.0,
+    "gpt-5.4-mini": 0.75,
 }
 _PRICE_PER_M_OUTPUT = {
     "claude-opus-4-7": 75.0,
@@ -37,6 +40,8 @@ _PRICE_PER_M_OUTPUT = {
     "claude-sonnet-4-6": 15.0,
     "claude-sonnet-4-5": 15.0,
     "claude-haiku-4-5": 5.0,
+    "gpt-5.5": 30.0,
+    "gpt-5.4-mini": 4.5,
 }
 _DEFAULT_PRICE_INPUT = 3.0
 _DEFAULT_PRICE_OUTPUT = 15.0

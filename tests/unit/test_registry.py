@@ -35,3 +35,7 @@ def test_pi_backend_registered():
 
 def test_opencode_backend_registered():
     assert "opencode" in backend_names()
+
+
+def test_codex_backend_registered():
+    assert "codex" in backend_names()

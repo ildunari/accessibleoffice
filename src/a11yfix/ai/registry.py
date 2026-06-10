@@ -53,6 +53,12 @@ def _opencode(model: str | None) -> VLMAdapter:
     return OpenCodeAdapter(model=model)
 
 
+def _codex(model: str | None) -> VLMAdapter:
+    from a11yfix.ai.codex_adapter import CodexAdapter
+
+    return CodexAdapter(model=model)
+
+
 _BACKENDS: dict[str, Callable[[str | None], VLMAdapter]] = {
     "claude": _claude,
     "claude-api": _claude_api,
@@ -61,6 +67,7 @@ _BACKENDS: dict[str, Callable[[str | None], VLMAdapter]] = {
     "openrouter": _openrouter,
     "pi": _pi,
     "opencode": _opencode,
+    "codex": _codex,
 }
 
 

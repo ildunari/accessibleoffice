@@ -114,12 +114,13 @@ def _parse_events(stdout: str) -> tuple[str, CallUsage]:
                         text += part  # genuinely new fragment
                 cost = cand.get("cost")
                 tokens = cand.get("tokens")
-                if isinstance(cost, (int, float)) or isinstance(tokens, dict):
+                cost_ok = isinstance(cost, (int, float)) and not isinstance(cost, bool)
+                if cost_ok or isinstance(tokens, dict):
                     tokens = tokens if isinstance(tokens, dict) else {}
                     usage = CallUsage(
                         input_tokens=int(tokens.get("input") or 0),
                         output_tokens=int(tokens.get("output") or 0),
-                        cost_usd=float(cost) if isinstance(cost, (int, float)) else None,
+                        cost_usd=float(cost) if cost_ok else None,
                     )
             except (TypeError, ValueError, AttributeError):
                 continue  # junk event costs only its metering, never the fix
